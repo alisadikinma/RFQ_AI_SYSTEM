@@ -1,102 +1,151 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { FileText, Eye, Plus, Search } from 'lucide-react';
+import { FileText, Eye, Plus, Search, Trash2, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatusBadge } from '@/components/shared/StatusBadge';
+import { TableRowSkeleton } from '@/components/shared/LoadingSkeleton';
+import { DeleteDialog } from '@/components/shared/DeleteDialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { containerVariants } from '@/lib/animations';
+import { getRFQs, deleteRFQ, getTopMatchForRFQ, type RFQRequest } from '@/lib/api/rfq';
+import { getCustomers, type Customer } from '@/lib/api/customers';
 
-const mockRFQs = [
-  {
-    id: 'rfq-001234',
-    code: 'RFQ-001234',
-    customer: 'XIAOMI',
-    model: 'POCO-X7',
-    status: 'completed' as const,
-    submittedAt: 'Dec 8, 2024',
-    topMatch: 92
-  },
-  {
-    id: 'rfq-001233',
-    code: 'RFQ-001233',
-    customer: 'TCL',
-    model: 'TCL-50XE',
-    status: 'processing' as const,
-    submittedAt: 'Dec 7, 2024',
-    topMatch: null
-  },
-  {
-    id: 'rfq-001232',
-    code: 'RFQ-001232',
-    customer: 'REALME',
-    model: 'REALME-C55',
-    status: 'completed' as const,
-    submittedAt: 'Dec 6, 2024',
-    topMatch: 87
-  },
-  {
-    id: 'rfq-001231',
-    code: 'RFQ-001231',
-    customer: 'XIAOMI',
-    model: 'REDMI-13',
-    status: 'completed' as const,
-    submittedAt: 'Dec 5, 2024',
-    topMatch: 78
-  },
-  {
-    id: 'rfq-001230',
-    code: 'RFQ-001230',
-    customer: 'OPPO',
-    model: 'OPPO-A79',
-    status: 'draft' as const,
-    submittedAt: 'Dec 4, 2024',
-    topMatch: null
-  },
-  {
-    id: 'rfq-001229',
-    code: 'RFQ-001229',
-    customer: 'VIVO',
-    model: 'VIVO-Y36',
-    status: 'failed' as const,
-    submittedAt: 'Dec 3, 2024',
-    topMatch: null
-  }
-];
+interface RFQWithCustomer extends RFQRequest {
+  customer: { id: string; code: string; name: string } | null;
+  topMatch?: number | null;
+}
 
 export default function RFQHistoryPage() {
+  const [rfqs, setRfqs] = useState<RFQWithCustomer[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingRFQ, setDeletingRFQ] = useState<RFQWithCustomer | null>(null);
   const itemsPerPage = 10;
 
-  const filteredRFQs = mockRFQs.filter(rfq => {
-    const matchesSearch =
-      rfq.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rfq.customer.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rfq.model.toLowerCase().includes(searchQuery.toLowerCase());
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const [rfqData, customerData] = await Promise.all([
+        getRFQs(),
+        getCustomers(),
+      ]);
 
-    const matchesCustomer = customerFilter === 'All' || rfq.customer === customerFilter;
+      // Fetch top match scores for completed RFQs
+      const rfqsWithMatches = await Promise.all(
+        rfqData.map(async (rfq) => {
+          let topMatch = null;
+          if (rfq.status === 'completed') {
+            topMatch = await getTopMatchForRFQ(rfq.id);
+          }
+          return { ...rfq, topMatch };
+        })
+      );
+
+      setRfqs(rfqsWithMatches);
+      setCustomers(customerData);
+    } catch (error) {
+      console.error('Failed to load RFQs:', error);
+      toast.error('Failed to load RFQ requests');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleDelete = async () => {
+    if (!deletingRFQ) return;
+
+    try {
+      await deleteRFQ(deletingRFQ.id);
+      setRfqs(rfqs.filter(r => r.id !== deletingRFQ.id));
+      toast.success('RFQ deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete RFQ:', error);
+      toast.error('Failed to delete RFQ');
+      throw error; // Re-throw so DeleteDialog can handle it
+    }
+  };
+
+  const filteredRFQs = rfqs.filter(rfq => {
+    const rfqCode = `RFQ-${rfq.id.slice(0, 6).toUpperCase()}`;
+    const matchesSearch =
+      rfqCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (rfq.customer?.code || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      rfq.model_name.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesCustomer = customerFilter === 'All' || rfq.customer?.code === customerFilter;
     const matchesStatus = statusFilter === 'All' || rfq.status === statusFilter;
 
     return matchesSearch && matchesCustomer && matchesStatus;
   });
 
-  const customers = ['All', ...Array.from(new Set(mockRFQs.map(rfq => rfq.customer)))];
+  const paginatedRFQs = filteredRFQs.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  const totalPages = Math.ceil(filteredRFQs.length / itemsPerPage);
+
+  const customerOptions = ['All', ...Array.from(new Set(customers.map(c => c.code)))];
   const statuses = ['All', 'completed', 'processing', 'draft', 'failed'];
 
-  const getMatchColor = (score: number | null) => {
+  const getMatchColor = (score: number | null | undefined) => {
     if (!score) return 'text-slate-400';
     if (score >= 80) return 'text-success';
     if (score >= 60) return 'text-amber-600';
     return 'text-red-600';
   };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const generateRFQCode = (id: string) => {
+    return `RFQ-${id.slice(0, 6).toUpperCase()}`;
+  };
+
+  if (loading) {
+    return (
+      <PageTransition>
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
+                RFQ History
+              </h1>
+              <p className="text-slate-600 dark:text-slate-400 mt-1">
+                View and manage all RFQ requests
+              </p>
+            </div>
+          </div>
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+            {[...Array(5)].map((_, i) => (
+              <TableRowSkeleton key={i} />
+            ))}
+          </div>
+        </div>
+      </PageTransition>
+    );
+  }
 
   return (
     <PageTransition>
@@ -131,23 +180,32 @@ export default function RFQHistoryPage() {
                 <Input
                   placeholder="Search by RFQ ID, model, or customer..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentPage(1);
+                  }}
                   className="pl-10"
                 />
               </div>
-              <Select value={customerFilter} onValueChange={setCustomerFilter}>
+              <Select value={customerFilter} onValueChange={(value) => {
+                setCustomerFilter(value);
+                setCurrentPage(1);
+              }}>
                 <SelectTrigger className="w-full md:w-48">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {customers.map((customer) => (
+                  {customerOptions.map((customer) => (
                     <SelectItem key={customer} value={customer}>
                       {customer === 'All' ? 'All Customers' : customer}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <Select value={statusFilter} onValueChange={(value) => {
+                setStatusFilter(value);
+                setCurrentPage(1);
+              }}>
                 <SelectTrigger className="w-full md:w-40">
                   <SelectValue />
                 </SelectTrigger>
@@ -160,7 +218,7 @@ export default function RFQHistoryPage() {
                 </SelectContent>
               </Select>
               <div className="text-sm text-slate-500 flex items-center whitespace-nowrap">
-                Showing {filteredRFQs.length} of {mockRFQs.length}
+                Showing {filteredRFQs.length} of {rfqs.length}
               </div>
             </div>
           </div>
@@ -206,7 +264,7 @@ export default function RFQHistoryPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRFQs.map((rfq, index) => (
+                  {paginatedRFQs.map((rfq, index) => (
                     <motion.tr
                       key={rfq.id}
                       initial={{ opacity: 0, y: 10 }}
@@ -214,37 +272,52 @@ export default function RFQHistoryPage() {
                       transition={{ delay: index * 0.05 }}
                       className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50"
                     >
-                      <TableCell className="font-mono font-medium">{rfq.code}</TableCell>
-                      <TableCell>{rfq.customer}</TableCell>
-                      <TableCell>{rfq.model}</TableCell>
+                      <TableCell className="font-mono font-medium">
+                        {generateRFQCode(rfq.id)}
+                      </TableCell>
+                      <TableCell>{rfq.customer?.code || '-'}</TableCell>
+                      <TableCell>{rfq.model_name}</TableCell>
                       <TableCell className="text-slate-600 dark:text-slate-400">
-                        {rfq.submittedAt}
+                        {formatDate(rfq.created_at)}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={rfq.status} />
                       </TableCell>
                       <TableCell className="text-right">
                         <span className={`font-semibold tabular-nums ${getMatchColor(rfq.topMatch)}`}>
-                          {rfq.topMatch ? `${rfq.topMatch}%` : '-'}
+                          {rfq.topMatch ? `${Math.round(rfq.topMatch)}%` : '-'}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
-                        {rfq.status === 'completed' && (
-                          <Link href={`/rfq/${rfq.id}/results`}>
-                            <Button variant="ghost" size="sm" className="gap-1">
-                              <Eye className="w-3.5 h-3.5" />
-                              View
-                            </Button>
-                          </Link>
-                        )}
-                        {rfq.status === 'processing' && (
-                          <Link href={`/rfq/${rfq.id}/processing`}>
-                            <Button variant="ghost" size="sm" className="gap-1">
-                              <Eye className="w-3.5 h-3.5" />
-                              Status
-                            </Button>
-                          </Link>
-                        )}
+                        <div className="flex items-center justify-end gap-1">
+                          {rfq.status === 'completed' && (
+                            <Link href={`/rfq/${rfq.id}/results`}>
+                              <Button variant="ghost" size="sm" className="gap-1">
+                                <Eye className="w-3.5 h-3.5" />
+                                View
+                              </Button>
+                            </Link>
+                          )}
+                          {rfq.status === 'processing' && (
+                            <Link href={`/rfq/${rfq.id}/processing`}>
+                              <Button variant="ghost" size="sm" className="gap-1">
+                                <Eye className="w-3.5 h-3.5" />
+                                Status
+                              </Button>
+                            </Link>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                            onClick={() => {
+                              setDeletingRFQ(rfq);
+                              setDeleteDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </motion.tr>
                   ))}
@@ -257,8 +330,8 @@ export default function RFQHistoryPage() {
             <div className="p-4 border-t border-slate-200 dark:border-slate-700">
               <div className="flex items-center justify-between">
                 <p className="text-sm text-slate-600 dark:text-slate-400">
-                  Showing <span className="font-medium">{filteredRFQs.length}</span> of{' '}
-                  <span className="font-medium">{mockRFQs.length}</span> results
+                  Showing <span className="font-medium">{paginatedRFQs.length}</span> of{' '}
+                  <span className="font-medium">{filteredRFQs.length}</span> results
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -270,14 +343,22 @@ export default function RFQHistoryPage() {
                     Previous
                   </Button>
                   <div className="flex items-center gap-1">
-                    <Button variant="outline" size="sm" className="bg-primary-50 dark:bg-primary-900/30">
-                      1
-                    </Button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                      <Button
+                        key={page}
+                        variant="outline"
+                        size="sm"
+                        className={page === currentPage ? 'bg-primary-50 dark:bg-primary-900/30' : ''}
+                        onClick={() => setCurrentPage(page)}
+                      >
+                        {page}
+                      </Button>
+                    ))}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={currentPage >= Math.ceil(filteredRFQs.length / itemsPerPage)}
+                    disabled={currentPage >= totalPages}
                     onClick={() => setCurrentPage(p => p + 1)}
                   >
                     Next
@@ -288,6 +369,21 @@ export default function RFQHistoryPage() {
           )}
         </motion.div>
       </div>
+
+      <DeleteDialog
+        isOpen={deleteDialogOpen}
+        onClose={() => {
+          setDeleteDialogOpen(false);
+          setDeletingRFQ(null);
+        }}
+        onConfirm={handleDelete}
+        title="Delete RFQ"
+        description={
+          deletingRFQ
+            ? `Are you sure you want to delete RFQ "${generateRFQCode(deletingRFQ.id)}" for model "${deletingRFQ.model_name}"?`
+            : ''
+        }
+      />
     </PageTransition>
   );
 }

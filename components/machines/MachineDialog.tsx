@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Machine, MachineInput, createMachine, updateMachine } from '@/lib/api/machines';
+import { Machine, MachineInput, createMachine, updateMachine } from '@/lib/api/stations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';

@@ -1,18 +1,35 @@
-# PHASE 3: File Parsers (Excel BOM & PDF)
+# PHASE 3: File Parsers (Excel BOM & PDF) + LLM Enhancement
 
 ## 🎯 OBJECTIVE
-Implement file parsing for Excel BOM files and PDF drawings to extract PCB features and component data for similarity matching.
+Implement file parsing with LLM fallback for complex/messy files.
 
 ---
 
-## 📋 CONTEXT
+## 📋 STRATEGY
 
-Project: RFQ AI System for EMS Manufacturing
-Location: `D:\Projects\RFQ_AI_SYSTEM`
+```
+┌─────────────────┐
+│  File Upload    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐     Success?     ┌─────────────────┐
+│ Algorithmic     │────────Yes──────▶│ Return Result   │
+│ Parser          │                  └─────────────────┘
+└────────┬────────┘
+         │ No / Partial
+         ▼
+┌─────────────────┐
+│ LLM Parser      │───────────────▶ Return Enhanced
+│ (OpenRouter)    │                  Result
+└─────────────────┘
+```
 
-**Input File Types:**
-1. **Excel (.xlsx, .xls)** - BOM files with component lists
-2. **PDF** - PCB drawings with dimensions, gerber previews
+**When to use LLM:**
+1. Excel columns tidak standard
+2. PDF tidak punya format terstruktur
+3. Part numbers tidak match patterns
+4. User request "analyze deeper"
 
 ---
 
@@ -22,28 +39,21 @@ Location: `D:\Projects\RFQ_AI_SYSTEM`
 lib/
 ├── parsers/
 │   ├── index.ts           # Main export
-│   ├── excel-parser.ts    # BOM Excel parsing
-│   ├── pdf-parser.ts      # PDF dimension extraction
+│   ├── excel-parser.ts    # Algorithmic BOM parsing
+│   ├── pdf-parser.ts      # Algorithmic PDF parsing
 │   ├── bom-analyzer.ts    # Component categorization
+│   ├── llm-enhanced.ts    # 🆕 LLM fallback parser
 │   └── types.ts           # Parser types
+├── llm/
+│   ├── client.ts          # OpenRouter client
+│   └── prompts/
+│       ├── bom-parser.ts  # BOM extraction prompts
+│       └── pdf-extractor.ts
 ```
 
 ---
 
 ## 📦 DEPENDENCIES
-
-Add to `package.json`:
-```json
-{
-  "dependencies": {
-    "xlsx": "^0.18.5",
-    "pdf-parse": "^1.1.1"
-  },
-  "devDependencies": {
-    "@types/pdf-parse": "^1.1.1"
-  }
-}
-```
 
 ```bash
 npm install xlsx pdf-parse
@@ -67,15 +77,7 @@ export interface ParsedBOMRow {
   reference_designator?: string;
 }
 
-export interface ParsedBOM {
-  filename: string;
-  total_rows: number;
-  rows: ParsedBOMRow[];
-  summary: BOMSummaryExtracted;
-  raw_text: string;
-}
-
-export interface BOMSummaryExtracted {
+export interface BOMSummary {
   total_line_items: number;
   unique_parts: number;
   total_quantity: number;
@@ -99,15 +101,42 @@ export interface BOMSummaryExtracted {
   fine_pitch_count: number;
 }
 
+export interface ParsedBOM {
+  filename: string;
+  total_rows: number;
+  rows: ParsedBOMRow[];
+  summary: BOMSummary;
+  raw_text: string;
+  parse_method: 'algorithmic' | 'llm' | 'hybrid';
+  confidence: number; // 0-1
+}
+
+export interface PCBDimensions {
+  length_mm: number | null;
+  width_mm: number | null;
+  layer_count: number | null;
+  cavity_count: number | null;
+  thickness_mm: number | null;
+}
+
 export interface ParsedPCBInfo {
   filename: string;
-  dimensions?: {
-    length_mm: number;
-    width_mm: number;
-  };
-  layer_count?: number;
-  cavity_count?: number;
+  dimensions: PCBDimensions;
   extracted_text: string;
+  parse_method: 'algorithmic' | 'llm' | 'hybrid';
+  confidence: number;
+  notes: string[];
+}
+
+export interface InferredFeatures {
+  has_rf: boolean;
+  has_sensors: boolean;
+  has_power_stage: boolean;
+  has_display_connector: boolean;
+  has_battery_connector: boolean;
+  smt_component_count: number;
+  bga_count: number;
+  fine_pitch_count: number;
 }
 
 export interface FileParseResult {
@@ -115,6 +144,7 @@ export interface FileParseResult {
   error?: string;
   bom?: ParsedBOM;
   pcb?: ParsedPCBInfo;
+  inferred_features?: InferredFeatures;
 }
 ```
 
@@ -122,32 +152,26 @@ export interface FileParseResult {
 
 ```typescript
 import * as XLSX from 'xlsx';
-import type { ParsedBOM, ParsedBOMRow } from './types';
+import type { ParsedBOM, ParsedBOMRow, BOMSummary } from './types';
 import { analyzeBOM } from './bom-analyzer';
 
-/**
- * Common BOM column header variations
- */
 const COLUMN_MAPPINGS = {
   item_no: ['item', 'no', 'line', '#', 'seq', 'item no', 'line no'],
   part_number: ['part', 'pn', 'part number', 'part no', 'mpn', 'mfr part', 'component'],
-  description: ['description', 'desc', 'part description', 'component name'],
+  description: ['description', 'desc', 'part description', 'component name', 'name'],
   quantity: ['qty', 'quantity', 'qy', 'amount', 'count'],
   package_type: ['package', 'footprint', 'case', 'pkg', 'size'],
   manufacturer: ['mfr', 'manufacturer', 'vendor', 'make', 'brand'],
   reference_designator: ['ref', 'designator', 'ref des', 'reference', 'location'],
 };
 
-/**
- * Parse Excel file buffer to BOM data
- */
 export async function parseExcelBOM(
   buffer: Buffer | ArrayBuffer,
   filename: string
 ): Promise<ParsedBOM> {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   
-  // Get first sheet (or sheet named 'BOM')
+  // Find BOM sheet
   let sheetName = workbook.SheetNames.find(
     name => name.toLowerCase().includes('bom')
   ) || workbook.SheetNames[0];
@@ -159,12 +183,16 @@ export async function parseExcelBOM(
     throw new Error('BOM file appears to be empty');
   }
   
-  // Find header row (usually first or second row)
+  // Find header row
   const headerRowIndex = findHeaderRow(jsonData);
   const headers = jsonData[headerRowIndex].map(h => String(h || '').toLowerCase().trim());
   
   // Map columns
   const columnMap = mapColumns(headers);
+  
+  // Check if we found enough columns
+  const foundColumns = Object.values(columnMap).filter(v => v !== undefined).length;
+  const confidence = foundColumns >= 3 ? 0.9 : foundColumns >= 2 ? 0.7 : 0.4;
   
   // Parse data rows
   const rows: ParsedBOMRow[] = [];
@@ -175,7 +203,7 @@ export async function parseExcelBOM(
     if (!row || row.length === 0) continue;
     
     const partNumber = getColumnValue(row, columnMap.part_number);
-    if (!partNumber) continue; // Skip empty rows
+    if (!partNumber) continue;
     
     const parsedRow: ParsedBOMRow = {
       item_no: parseInt(getColumnValue(row, columnMap.item_no)) || i - headerRowIndex,
@@ -191,7 +219,6 @@ export async function parseExcelBOM(
     rawText += `${parsedRow.part_number} ${parsedRow.description} ${parsedRow.package_type || ''}\n`;
   }
   
-  // Analyze BOM for summary
   const summary = analyzeBOM(rows);
   
   return {
@@ -200,11 +227,12 @@ export async function parseExcelBOM(
     rows,
     summary,
     raw_text: rawText,
+    parse_method: 'algorithmic',
+    confidence,
   };
 }
 
 function findHeaderRow(data: any[][]): number {
-  // Look for row with multiple known header keywords
   for (let i = 0; i < Math.min(5, data.length); i++) {
     const row = data[i];
     if (!row) continue;
@@ -218,8 +246,8 @@ function findHeaderRow(data: any[][]): number {
   return 0;
 }
 
-function mapColumns(headers: string[]): Record<string, number> {
-  const map: Record<string, number> = {};
+function mapColumns(headers: string[]): Record<string, number | undefined> {
+  const map: Record<string, number | undefined> = {};
   
   for (const [field, variations] of Object.entries(COLUMN_MAPPINGS)) {
     for (let i = 0; i < headers.length; i++) {
@@ -239,102 +267,55 @@ function getColumnValue(row: any[], index: number | undefined): string {
   return String(row[index] || '').trim();
 }
 
-/**
- * Parse multiple sheets for multi-board BOMs
- */
-export async function parseMultiBoardBOM(
-  buffer: Buffer | ArrayBuffer,
-  filename: string
-): Promise<Map<string, ParsedBOM>> {
+// Export raw text for LLM fallback
+export function extractRawTextFromExcel(buffer: Buffer | ArrayBuffer): string {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const results = new Map<string, ParsedBOM>();
+  let rawText = '';
   
   for (const sheetName of workbook.SheetNames) {
-    // Skip sheets that don't look like BOMs
-    if (sheetName.toLowerCase().includes('summary') || 
-        sheetName.toLowerCase().includes('cover')) {
-      continue;
-    }
-    
     const sheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
-    
-    if (jsonData.length < 2) continue;
-    
-    try {
-      // Re-parse each sheet
-      const sheetBuffer = XLSX.write(
-        { SheetNames: [sheetName], Sheets: { [sheetName]: sheet } },
-        { type: 'buffer' }
-      );
-      const bom = await parseExcelBOM(sheetBuffer, `${filename}:${sheetName}`);
-      results.set(sheetName, bom);
-    } catch (e) {
-      console.warn(`Failed to parse sheet ${sheetName}:`, e);
-    }
+    const text = XLSX.utils.sheet_to_csv(sheet);
+    rawText += `=== Sheet: ${sheetName} ===\n${text}\n\n`;
   }
   
-  return results;
+  return rawText;
 }
 ```
 
 ### File 3: `lib/parsers/bom-analyzer.ts`
 
 ```typescript
-import type { ParsedBOMRow, BOMSummaryExtracted } from './types';
+import type { ParsedBOMRow, BOMSummary, InferredFeatures } from './types';
 
-/**
- * Component category patterns
- */
 const PATTERNS = {
-  // MCU/Processor
-  mcu: /STM32|ESP32|NRF52|PIC\d|ATMEGA|ATTINY|RP2040|ARM|CORTEX|ATSAM|LPC|IMXRT|MSP430/i,
-  
-  // RF/Wireless
-  rf: /WIFI|BT|BLUETOOTH|NRF24|SX127|CC1101|LoRa|4G|LTE|GSM|GPRS|RF|ANT|2\.4G|5G|WLAN|BLE/i,
-  
-  // Sensors
+  mcu: /STM32|ESP32|NRF52|PIC\d|ATMEGA|ATTINY|RP2040|CORTEX|ATSAM|LPC|IMXRT|MSP430|SNAPDRAGON|MEDIATEK|MT\d{4}/i,
+  rf: /WIFI|BT|BLUETOOTH|NRF24|SX127|CC1101|LoRa|4G|LTE|GSM|GPRS|RF|ANT|2\.4G|5G|WLAN|BLE|ZIGBEE|NFC/i,
   sensor: /BME\d|BMP\d|MPU\d|LSM\d|ICM\d|SHT\d|AHT\d|HDC\d|ACCEL|GYRO|COMPASS|MEMS|IMU|TEMP|HUMID|PRESSURE|LIGHT|PIR|TOF/i,
-  
-  // Power Management
   power: /TPS|LM317|LM78|AMS1117|MP1584|MP2307|LDO|DCDC|BUCK|BOOST|PMIC|REG|PWR|BATT|CHARGER|BQ\d/i,
-  
-  // IC general
-  ic: /IC|CHIP|U\d|QFN|QFP|BGA|SOP|SSOP|TSSOP|SOIC|DIP|LQFP|LFBGA|VFBGA/i,
-  
-  // Passives
+  ic: /IC|CHIP|U\d|QFN|QFP|BGA|SOP|SSOP|TSSOP|SOIC|DIP|LQFP/i,
   resistor: /^R\d|RES|OHM|\dR\d|\dK|\dM|RESISTOR/i,
   capacitor: /^C\d|CAP|UF|NF|PF|MLCC|CAPACITOR|ELEC/i,
   inductor: /^L\d|IND|UH|NH|INDUCTOR|FERRITE|CHOKE/i,
-  
-  // Connectors
-  connector: /CONN|USB|HDMI|FPC|FFC|JST|MOLEX|HEADER|PIN|JACK|SOCKET|SIM|SD|MICRO|TYPE-C/i,
-  
-  // Packages
+  connector: /CONN|USB|HDMI|FPC|FFC|JST|MOLEX|HEADER|PIN|JACK|SOCKET|SIM|SD|MICRO|TYPE-C|BATTERY/i,
+  display: /LCD|OLED|TFT|DISPLAY|SCREEN|PANEL|ILI|ST7|SSD1/i,
   bga: /BGA|CSP|WLCSP|FBGA|VFBGA|LFBGA/i,
   fine_pitch: /0\.4MM|0\.5MM|0402|0201|01005|FINE/i,
   through_hole: /DIP|PTH|TH|THROUGH|HOLE|RADIAL|AXIAL/i,
 };
 
-/**
- * Analyze BOM rows to extract summary statistics
- */
-export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummaryExtracted {
-  const summary: BOMSummaryExtracted = {
+export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummary {
+  const summary: BOMSummary = {
     total_line_items: rows.length,
     unique_parts: new Set(rows.map(r => r.part_number)).size,
     total_quantity: rows.reduce((sum, r) => sum + r.quantity, 0),
-    
     ic_count: 0,
     passive_count: 0,
     connector_count: 0,
     mechanical_count: 0,
-    
     mcu_parts: [],
     rf_parts: [],
     sensor_parts: [],
     power_parts: [],
-    
     smd_count: 0,
     through_hole_count: 0,
     bga_count: 0,
@@ -344,7 +325,7 @@ export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummaryExtracted {
   for (const row of rows) {
     const text = `${row.part_number} ${row.description} ${row.package_type || ''}`;
     
-    // Categorize by component type
+    // Categorize
     if (PATTERNS.mcu.test(text)) {
       summary.ic_count += row.quantity;
       summary.mcu_parts.push(row.part_number);
@@ -368,12 +349,8 @@ export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummaryExtracted {
     }
     
     // Package analysis
-    if (PATTERNS.bga.test(text)) {
-      summary.bga_count += row.quantity;
-    }
-    if (PATTERNS.fine_pitch.test(text)) {
-      summary.fine_pitch_count += row.quantity;
-    }
+    if (PATTERNS.bga.test(text)) summary.bga_count += row.quantity;
+    if (PATTERNS.fine_pitch.test(text)) summary.fine_pitch_count += row.quantity;
     if (PATTERNS.through_hole.test(text)) {
       summary.through_hole_count += row.quantity;
     } else {
@@ -381,7 +358,7 @@ export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummaryExtracted {
     }
   }
   
-  // Deduplicate part lists
+  // Deduplicate
   summary.mcu_parts = [...new Set(summary.mcu_parts)];
   summary.rf_parts = [...new Set(summary.rf_parts)];
   summary.sensor_parts = [...new Set(summary.sensor_parts)];
@@ -390,24 +367,14 @@ export function analyzeBOM(rows: ParsedBOMRow[]): BOMSummaryExtracted {
   return summary;
 }
 
-/**
- * Infer PCB features from BOM analysis
- */
-export function inferPCBFeaturesFromBOM(summary: BOMSummaryExtracted): {
-  has_rf: boolean;
-  has_sensors: boolean;
-  has_power_stage: boolean;
-  smt_component_count: number;
-  through_hole_count: number;
-  bga_count: number;
-  fine_pitch_count: number;
-} {
+export function inferPCBFeatures(summary: BOMSummary): InferredFeatures {
   return {
     has_rf: summary.rf_parts.length > 0,
     has_sensors: summary.sensor_parts.length > 0,
     has_power_stage: summary.power_parts.length > 0,
+    has_display_connector: summary.connector_count > 0, // Simplified
+    has_battery_connector: summary.connector_count > 0, // Simplified
     smt_component_count: summary.smd_count,
-    through_hole_count: summary.through_hole_count,
     bga_count: summary.bga_count,
     fine_pitch_count: summary.fine_pitch_count,
   };
@@ -418,11 +385,8 @@ export function inferPCBFeaturesFromBOM(summary: BOMSummaryExtracted): {
 
 ```typescript
 import pdf from 'pdf-parse';
-import type { ParsedPCBInfo } from './types';
+import type { ParsedPCBInfo, PCBDimensions } from './types';
 
-/**
- * Parse PDF for PCB dimension information
- */
 export async function parsePCBPdf(
   buffer: Buffer,
   filename: string
@@ -430,38 +394,34 @@ export async function parsePCBPdf(
   const data = await pdf(buffer);
   const text = data.text;
   
-  const result: ParsedPCBInfo = {
-    filename,
-    extracted_text: text,
-  };
-  
-  // Try to extract dimensions
   const dimensions = extractDimensions(text);
-  if (dimensions) {
-    result.dimensions = dimensions;
-  }
-  
-  // Try to extract layer count
   const layers = extractLayerCount(text);
-  if (layers) {
-    result.layer_count = layers;
-  }
-  
-  // Try to extract cavity/panel info
   const cavity = extractCavityCount(text);
-  if (cavity) {
-    result.cavity_count = cavity;
-  }
   
-  return result;
+  // Calculate confidence based on what we found
+  let confidence = 0.3;
+  if (dimensions.length_mm && dimensions.width_mm) confidence += 0.3;
+  if (layers) confidence += 0.2;
+  if (cavity) confidence += 0.2;
+  
+  return {
+    filename,
+    dimensions: {
+      length_mm: dimensions.length_mm,
+      width_mm: dimensions.width_mm,
+      layer_count: layers,
+      cavity_count: cavity,
+      thickness_mm: null,
+    },
+    extracted_text: text,
+    parse_method: 'algorithmic',
+    confidence,
+    notes: [],
+  };
 }
 
-/**
- * Extract PCB dimensions from text
- * Looks for patterns like "100mm x 50mm", "L: 100, W: 50"
- */
-function extractDimensions(text: string): { length_mm: number; width_mm: number } | null {
-  // Pattern: NNNmm x NNNmm or NNN x NNN mm
+function extractDimensions(text: string): { length_mm: number | null; width_mm: number | null } {
+  // Pattern: NNNmm x NNNmm
   const pattern1 = /(\d+\.?\d*)\s*(?:mm)?\s*[x×X]\s*(\d+\.?\d*)\s*mm/i;
   const match1 = text.match(pattern1);
   if (match1) {
@@ -485,211 +445,287 @@ function extractDimensions(text: string): { length_mm: number; width_mm: number 
     };
   }
   
-  // Pattern: Board Size NNN x NNN
-  const pattern2 = /board\s*size\s*[:=]?\s*(\d+\.?\d*)\s*[x×X]\s*(\d+\.?\d*)/i;
-  const match2 = text.match(pattern2);
-  if (match2) {
-    const [, l, w] = match2;
-    return {
-      length_mm: Math.max(parseFloat(l), parseFloat(w)),
-      width_mm: Math.min(parseFloat(l), parseFloat(w)),
-    };
-  }
-  
-  return null;
+  return { length_mm: null, width_mm: null };
 }
 
-/**
- * Extract layer count from text
- */
 function extractLayerCount(text: string): number | null {
-  // Pattern: N-layer, N layer, N layers
   const pattern = /(\d+)\s*[-]?\s*layer/i;
   const match = text.match(pattern);
-  if (match) {
-    return parseInt(match[1]);
-  }
+  return match ? parseInt(match[1]) : null;
+}
+
+function extractCavityCount(text: string): number | null {
+  const pattern1 = /(\d+)\s*[-]?\s*up/i;
+  const match1 = text.match(pattern1);
+  if (match1) return parseInt(match1[1]);
   
-  // Pattern: Layer: N, Layers: N
-  const pattern2 = /layers?\s*[:=]?\s*(\d+)/i;
+  const pattern2 = /panel\s*(\d+)\s*[x×X]\s*(\d+)/i;
   const match2 = text.match(pattern2);
-  if (match2) {
-    return parseInt(match2[1]);
-  }
+  if (match2) return parseInt(match2[1]) * parseInt(match2[2]);
   
   return null;
 }
 
-/**
- * Extract cavity/panel count from text
- */
-function extractCavityCount(text: string): number | null {
-  // Pattern: N-up, Nup, N up
-  const pattern1 = /(\d+)\s*[-]?\s*up/i;
-  const match1 = text.match(pattern1);
-  if (match1) {
-    return parseInt(match1[1]);
-  }
-  
-  // Pattern: cavity: N, cavities: N, N cavity
-  const pattern2 = /(?:cavit(?:y|ies))\s*[:=]?\s*(\d+)|(\d+)\s*cavit/i;
-  const match2 = text.match(pattern2);
-  if (match2) {
-    return parseInt(match2[1] || match2[2]);
-  }
-  
-  // Pattern: panel N x N (e.g., 2x2 = 4 cavity)
-  const pattern3 = /panel\s*(\d+)\s*[x×X]\s*(\d+)/i;
-  const match3 = text.match(pattern3);
-  if (match3) {
-    return parseInt(match3[1]) * parseInt(match3[2]);
-  }
-  
-  return null;
+export function extractRawTextFromPDF(buffer: Buffer): Promise<string> {
+  return pdf(buffer).then(data => data.text);
 }
 ```
 
-### File 5: `lib/parsers/index.ts`
+### File 5: `lib/parsers/llm-enhanced.ts` 🆕
 
 ```typescript
-import { parseExcelBOM, parseMultiBoardBOM } from './excel-parser';
-import { parsePCBPdf } from './pdf-parser';
-import { analyzeBOM, inferPCBFeaturesFromBOM } from './bom-analyzer';
-import type { FileParseResult, ParsedBOM, ParsedPCBInfo } from './types';
-
-export * from './types';
-export { analyzeBOM, inferPCBFeaturesFromBOM };
+import { parseBOMWithLLM, type ParsedBOM as LLMParsedBOM } from '@/lib/llm/prompts/bom-parser';
+import { extractPCBDimensionsWithLLM } from '@/lib/llm/prompts/pdf-extractor';
+import { extractRawTextFromExcel } from './excel-parser';
+import { extractRawTextFromPDF } from './pdf-parser';
+import type { ParsedBOM, ParsedPCBInfo, BOMSummary, InferredFeatures } from './types';
 
 /**
- * Parse uploaded file based on type
+ * Enhanced BOM parsing with LLM fallback
+ * Use when algorithmic parser has low confidence
+ */
+export async function parseExcelBOMWithLLM(
+  buffer: Buffer,
+  filename: string
+): Promise<ParsedBOM> {
+  const rawText = extractRawTextFromExcel(buffer);
+  
+  // Call LLM
+  const llmResult = await parseBOMWithLLM(rawText);
+  
+  // Convert to ParsedBOM format
+  const summary: BOMSummary = {
+    total_line_items: llmResult.total_line_items,
+    unique_parts: llmResult.total_line_items, // Approximate
+    total_quantity: llmResult.ic_count + llmResult.passive_count + llmResult.connector_count,
+    ic_count: llmResult.ic_count,
+    passive_count: llmResult.passive_count,
+    connector_count: llmResult.connector_count,
+    mechanical_count: 0,
+    mcu_parts: llmResult.mcu_part_numbers,
+    rf_parts: llmResult.rf_module_parts,
+    sensor_parts: llmResult.sensor_parts,
+    power_parts: llmResult.power_ic_parts,
+    smd_count: llmResult.inferred_features.estimated_component_count,
+    through_hole_count: 0,
+    bga_count: llmResult.inferred_features.has_bga ? 1 : 0,
+    fine_pitch_count: 0,
+  };
+  
+  return {
+    filename,
+    total_rows: llmResult.total_line_items,
+    rows: [], // LLM doesn't return individual rows
+    summary,
+    raw_text: rawText,
+    parse_method: 'llm',
+    confidence: 0.85, // LLM generally high confidence
+  };
+}
+
+/**
+ * Enhanced PDF parsing with LLM fallback
+ */
+export async function parsePCBPdfWithLLM(
+  buffer: Buffer,
+  filename: string
+): Promise<ParsedPCBInfo> {
+  const rawText = await extractRawTextFromPDF(buffer);
+  
+  // Call LLM
+  const llmResult = await extractPCBDimensionsWithLLM(rawText);
+  
+  return {
+    filename,
+    dimensions: {
+      length_mm: llmResult.length_mm,
+      width_mm: llmResult.width_mm,
+      layer_count: llmResult.layer_count,
+      cavity_count: llmResult.cavity_count,
+      thickness_mm: llmResult.thickness_mm,
+    },
+    extracted_text: rawText,
+    parse_method: 'llm',
+    confidence: 0.85,
+    notes: llmResult.notes,
+  };
+}
+
+/**
+ * Get inferred features from LLM-parsed BOM
+ */
+export function getInferredFeaturesFromLLM(llmResult: LLMParsedBOM): InferredFeatures {
+  return {
+    has_rf: llmResult.inferred_features.has_rf,
+    has_sensors: llmResult.inferred_features.has_sensors,
+    has_power_stage: llmResult.inferred_features.has_power_stage,
+    has_display_connector: llmResult.inferred_features.has_display_connector,
+    has_battery_connector: llmResult.inferred_features.has_battery_connector,
+    smt_component_count: llmResult.inferred_features.estimated_component_count,
+    bga_count: llmResult.inferred_features.has_bga ? 1 : 0,
+    fine_pitch_count: 0,
+  };
+}
+```
+
+### File 6: `lib/parsers/index.ts`
+
+```typescript
+import { parseExcelBOM } from './excel-parser';
+import { parsePCBPdf } from './pdf-parser';
+import { parseExcelBOMWithLLM, parsePCBPdfWithLLM } from './llm-enhanced';
+import { analyzeBOM, inferPCBFeatures } from './bom-analyzer';
+import type { FileParseResult, ParsedBOM, ParsedPCBInfo, InferredFeatures } from './types';
+
+export * from './types';
+export { analyzeBOM, inferPCBFeatures };
+
+const LLM_CONFIDENCE_THRESHOLD = 0.6;
+
+/**
+ * Smart file parser with automatic LLM fallback
  */
 export async function parseUploadedFile(
-  file: File
+  file: File,
+  options?: { forceLLM?: boolean }
 ): Promise<FileParseResult> {
-  const buffer = await file.arrayBuffer();
+  const buffer = Buffer.from(await file.arrayBuffer());
   const filename = file.name.toLowerCase();
   
   try {
+    // Excel/BOM files
     if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
-      const bom = await parseExcelBOM(Buffer.from(buffer), file.name);
-      return { success: true, bom };
+      // Try algorithmic first
+      let bom = await parseExcelBOM(buffer, file.name);
+      
+      // If low confidence or forced, use LLM
+      if (options?.forceLLM || bom.confidence < LLM_CONFIDENCE_THRESHOLD) {
+        try {
+          const llmBom = await parseExcelBOMWithLLM(buffer, file.name);
+          // Merge: prefer LLM summary, keep algorithmic rows
+          bom = {
+            ...bom,
+            summary: llmBom.summary,
+            parse_method: 'hybrid',
+            confidence: Math.max(bom.confidence, llmBom.confidence),
+          };
+        } catch (llmError) {
+          console.warn('LLM parsing failed, using algorithmic result:', llmError);
+        }
+      }
+      
+      const inferred_features = inferPCBFeatures(bom.summary);
+      return { success: true, bom, inferred_features };
     }
     
+    // PDF files
     if (filename.endsWith('.pdf')) {
-      const pcb = await parsePCBPdf(Buffer.from(buffer), file.name);
+      // Try algorithmic first
+      let pcb = await parsePCBPdf(buffer, file.name);
+      
+      // If low confidence or forced, use LLM
+      if (options?.forceLLM || pcb.confidence < LLM_CONFIDENCE_THRESHOLD) {
+        try {
+          const llmPcb = await parsePCBPdfWithLLM(buffer, file.name);
+          pcb = {
+            ...pcb,
+            dimensions: {
+              ...pcb.dimensions,
+              ...Object.fromEntries(
+                Object.entries(llmPcb.dimensions).filter(([_, v]) => v !== null)
+              ),
+            },
+            parse_method: 'hybrid',
+            confidence: Math.max(pcb.confidence, llmPcb.confidence),
+            notes: [...pcb.notes, ...llmPcb.notes],
+          };
+        } catch (llmError) {
+          console.warn('LLM parsing failed, using algorithmic result:', llmError);
+        }
+      }
+      
       return { success: true, pcb };
     }
     
     return {
       success: false,
-      error: `Unsupported file type: ${filename}. Supported: .xlsx, .xls, .pdf`,
+      error: `Unsupported file type. Supported: .xlsx, .xls, .pdf`,
     };
   } catch (error: any) {
     return {
       success: false,
-      error: `Failed to parse ${filename}: ${error.message}`,
+      error: `Failed to parse ${file.name}: ${error.message}`,
     };
   }
 }
 
 /**
- * Parse multiple files and combine results
+ * Force LLM parsing for complex files
  */
-export async function parseMultipleFiles(
-  files: File[]
-): Promise<{
-  boms: ParsedBOM[];
-  pcbs: ParsedPCBInfo[];
-  errors: string[];
-}> {
-  const boms: ParsedBOM[] = [];
-  const pcbs: ParsedPCBInfo[] = [];
-  const errors: string[] = [];
-  
-  for (const file of files) {
-    const result = await parseUploadedFile(file);
-    
-    if (result.success) {
-      if (result.bom) boms.push(result.bom);
-      if (result.pcb) pcbs.push(result.pcb);
-    } else if (result.error) {
-      errors.push(result.error);
-    }
-  }
-  
-  return { boms, pcbs, errors };
+export async function parseWithLLM(file: File): Promise<FileParseResult> {
+  return parseUploadedFile(file, { forceLLM: true });
 }
 ```
 
 ---
 
-## 🔌 INTEGRATION WITH WIZARD
+## 🔌 API ROUTE
 
-Update `components/rfq/wizard/steps/FileUploadStep.tsx`:
+### `app/api/parse/route.ts`
 
 ```typescript
-import { parseUploadedFile, inferPCBFeaturesFromBOM } from '@/lib/parsers';
+import { NextRequest, NextResponse } from 'next/server';
+import { parseUploadedFile, parseWithLLM } from '@/lib/parsers';
 
-// In file upload handler:
-const handleFileUpload = async (files: FileList) => {
-  setIsProcessing(true);
-  
-  for (const file of Array.from(files)) {
-    const result = await parseUploadedFile(file);
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file') as File;
+    const forceLLM = formData.get('forceLLM') === 'true';
     
-    if (result.success) {
-      if (result.bom) {
-        // Extract features and update wizard data
-        const features = inferPCBFeaturesFromBOM(result.bom.summary);
-        onChange({
-          bom: result.bom,
-          pcbFeatures: { ...data.pcbFeatures, ...features },
-        });
-      }
-      if (result.pcb) {
-        onChange({
-          pcbInfo: result.pcb,
-          pcbFeatures: {
-            ...data.pcbFeatures,
-            ...result.pcb.dimensions,
-            layer_count: result.pcb.layer_count,
-            cavity_count: result.pcb.cavity_count,
-          },
-        });
-      }
-    } else {
-      toast.error(result.error);
+    if (!file) {
+      return NextResponse.json(
+        { error: 'No file provided' },
+        { status: 400 }
+      );
     }
+    
+    const result = forceLLM 
+      ? await parseWithLLM(file)
+      : await parseUploadedFile(file);
+    
+    return NextResponse.json(result);
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
   }
-  
-  setIsProcessing(false);
-};
+}
 ```
 
 ---
 
 ## ✅ ACCEPTANCE CRITERIA
 
-- [ ] Excel BOM parser handles common formats (Altium, KiCad, generic)
-- [ ] Column mapping works with varied header names
-- [ ] Component categorization accurate for IC/passive/connector
-- [ ] MCU, RF, sensor detection from part numbers
-- [ ] PDF dimension extraction works for common formats
-- [ ] Multi-board BOMs (multiple sheets) handled
-- [ ] Errors reported gracefully without crashing
-- [ ] File upload in wizard works end-to-end
+- [ ] Excel parser handles common BOM formats
+- [ ] PDF parser extracts dimensions
+- [ ] LLM fallback triggered when confidence < 0.6
+- [ ] Hybrid results combine best of both
+- [ ] API route `/api/parse` works
+- [ ] File upload in wizard triggers parsing
+- [ ] Inferred features populated correctly
 
 ---
 
-## 🧪 TEST FILES
+## 🧪 TEST
 
-Create test files in `__tests__/fixtures/`:
-- `sample_bom.xlsx` - Standard BOM with varied columns
-- `multi_board_bom.xlsx` - Multiple sheets for Main/Sub boards
-- `pcb_drawing.pdf` - PDF with dimension info
+```typescript
+// Test hybrid parsing
+const file = new File([excelBuffer], 'messy_bom.xlsx');
+const result = await parseUploadedFile(file);
 
----
-
-## 🚀 NEXT PHASE
-
-After parsers work, proceed to PHASE 4: Cost Calculation Engine
+console.log(result.bom?.parse_method); // 'hybrid' if LLM was used
+console.log(result.bom?.confidence);   // Should be high
+console.log(result.inferred_features); // { has_rf: true, ... }
+```

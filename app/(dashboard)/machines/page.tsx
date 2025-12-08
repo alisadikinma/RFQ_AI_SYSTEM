@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { LoadingSkeleton, TableRowSkeleton } from '@/components/shared/LoadingSkeleton';
 import { DeleteDialog } from '@/components/shared/DeleteDialog';
 import { MachineDialog } from '@/components/machines/MachineDialog';
-import { Machine, getMachines, deleteMachine, getMachineUsageCount } from '@/lib/api/machines';
+import { Machine, getMachines, deleteMachine, getMachineUsageCount } from '@/lib/api/stations';
 import { containerVariants, itemVariants } from '@/lib/animations';
 
 const rowVariants = {

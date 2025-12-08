@@ -49,7 +49,7 @@ export const getModels = async () => {
       customer:customers(code, name),
       stations:model_stations(
         *,
-        machine:machines(id, code, name, typical_uph, cycle_time)
+        machine:station_master(id, code, name, typical_uph, cycle_time)
       )
     `)
     .order('code', { ascending: true });
@@ -66,7 +66,7 @@ export const getModelById = async (id: string) => {
       customer:customers(code, name),
       stations:model_stations(
         *,
-        machine:machines(id, code, name, description, typical_uph, cycle_time)
+        machine:station_master(id, code, name, description, typical_uph, cycle_time)
       )
     `)
     .eq('id', id)

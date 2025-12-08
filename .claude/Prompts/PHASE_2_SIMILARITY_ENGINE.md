@@ -1,24 +1,17 @@
-# PHASE 2: Similarity Engine Implementation
+# PHASE 2: Similarity Engine (UPDATED)
 
 ## 🎯 OBJECTIVE
-Implement the 3-tower similarity engine that matches new RFQ requests against historical models using PCB geometry, BOM semantics, and station configuration.
+Implement similarity engine that uses `station_master` and `station_aliases` tables for intelligent station matching.
 
 ---
 
-## 📋 CONTEXT
+## 📋 KEY CHANGES
 
-Project: RFQ AI System for EMS Manufacturing
-Location: `D:\Projects\RFQ_AI_SYSTEM`
-
-**Similarity Formula:**
-```
-Score_total = (0.6 × sim_PCB) + (0.4 × sim_BOM)
-```
-
-**Thresholds:**
-- ≥0.85 → Strong match → reuse full station plan
-- 0.70–0.85 → Moderate → adjust based on differences  
-- <0.70 → Weak → follow inference rules
+| Before | After |
+|--------|-------|
+| Hardcoded station mappings | Use `station_aliases` table |
+| `machines` table | Use `station_master` table |
+| Manual inference rules | Use `triggers_if` from station_master |
 
 ---
 
@@ -28,11 +21,12 @@ Score_total = (0.6 × sim_PCB) + (0.4 × sim_BOM)
 lib/
 ├── similarity/
 │   ├── index.ts              # Main export
+│   ├── types.ts              # Type definitions  
 │   ├── pcb-similarity.ts     # PCB geometry matching
 │   ├── bom-similarity.ts     # BOM semantic matching
-│   ├── station-matcher.ts    # Station configuration matching
-│   ├── inference-engine.ts   # Missing station inference
-│   └── types.ts              # Type definitions
+│   ├── station-matcher.ts    # ⭐ UPDATED: Uses station_aliases
+│   ├── inference-engine.ts   # ⭐ UPDATED: Uses station_master.triggers_if
+│   └── db-queries.ts         # ⭐ NEW: Database query helpers
 ```
 
 ---
@@ -42,6 +36,30 @@ lib/
 ### File 1: `lib/similarity/types.ts`
 
 ```typescript
+// Station Master (from database)
+export interface StationMaster {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  category: 'Testing' | 'Assembly' | 'Inspection' | 'Programming';
+  typical_cycle_time_sec: number;
+  typical_uph: number;
+  operator_ratio: number;
+  triggers_if: string[];    // e.g., ['has_rf', 'has_wireless']
+  required_for: string[];   // e.g., ['smartphone', 'iot']
+}
+
+// Station Alias (customer-specific naming)
+export interface StationAlias {
+  id: string;
+  alias_name: string;
+  master_station_id: string;
+  customer_id: string | null;
+  confidence: 'high' | 'medium' | 'low';
+  master?: StationMaster;    // Joined data
+}
+
 export interface PCBFeatures {
   length_mm: number;
   width_mm: number;
@@ -66,12 +84,12 @@ export interface BOMSummary {
   mcu_part_numbers: string[];
   rf_module_parts: string[];
   sensor_parts: string[];
-  power_ic_parts: string[];
 }
 
 export interface StationConfig {
   board_type: string;
-  station_code: string;
+  station_code: string;       // Customer's term
+  master_code?: string;       // Resolved standard code
   sequence: number;
   manpower?: number;
 }
@@ -83,406 +101,394 @@ export interface SimilarityResult {
   pcb_similarity: number;
   bom_similarity: number;
   overall_similarity: number;
-  matched_stations: string[];
+  matched_stations: StationMatch[];
   missing_stations: string[];
   extra_stations: string[];
   confidence: 'high' | 'medium' | 'low';
 }
 
+export interface StationMatch {
+  customer_term: string;
+  master_code: string;
+  master_name: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
 export interface InferenceResult {
-  recommended_stations: StationConfig[];
-  inference_rules_applied: string[];
+  recommended_stations: StationMaster[];
+  rules_applied: string[];
   warnings: string[];
 }
 ```
 
-### File 2: `lib/similarity/pcb-similarity.ts`
+### File 2: `lib/similarity/db-queries.ts` (NEW)
 
 ```typescript
-import { PCBFeatures } from './types';
+import { supabase } from '@/lib/supabase/client';
+import type { StationMaster, StationAlias } from './types';
 
 /**
- * Calculate PCB geometry similarity using weighted Euclidean distance
- * normalized to 0-1 range
+ * Get all master stations
  */
-export function calculatePCBSimilarity(
-  source: PCBFeatures,
-  target: PCBFeatures
-): number {
-  // Feature weights based on importance for EMS matching
-  const weights = {
-    area: 0.20,           // Board size is critical
-    layer_count: 0.15,    // Complexity indicator
-    cavity_count: 0.10,   // Panel design
-    component_count: 0.15,
-    bga_count: 0.10,
-    has_rf: 0.15,         // RF requires specific test stations
-    has_sensors: 0.10,
-    has_power: 0.05,
-  };
-
-  // Normalize numeric values
-  const sourceArea = source.length_mm * source.width_mm;
-  const targetArea = target.length_mm * target.width_mm;
+export async function getMasterStations(): Promise<StationMaster[]> {
+  const { data, error } = await supabase
+    .from('station_master')
+    .select('*')
+    .order('category', { ascending: true });
   
-  // Calculate individual similarities
-  const areaSim = 1 - Math.min(Math.abs(sourceArea - targetArea) / Math.max(sourceArea, targetArea), 1);
-  const layerSim = 1 - Math.abs(source.layer_count - target.layer_count) / 10;
-  const cavitySim = source.cavity_count === target.cavity_count ? 1 : 0.5;
-  const componentSim = 1 - Math.min(
-    Math.abs(source.smt_component_count - target.smt_component_count) / 
-    Math.max(source.smt_component_count, target.smt_component_count, 1),
-    1
-  );
-  const bgaSim = 1 - Math.min(Math.abs(source.bga_count - target.bga_count) / Math.max(source.bga_count, target.bga_count, 1), 1);
-  const rfSim = source.has_rf === target.has_rf ? 1 : 0;
-  const sensorSim = source.has_sensors === target.has_sensors ? 1 : 0;
-  const powerSim = source.has_power_stage === target.has_power_stage ? 1 : 0;
-
-  // Weighted sum
-  const similarity = 
-    weights.area * areaSim +
-    weights.layer_count * Math.max(layerSim, 0) +
-    weights.cavity_count * cavitySim +
-    weights.component_count * componentSim +
-    weights.bga_count * bgaSim +
-    weights.has_rf * rfSim +
-    weights.has_sensors * sensorSim +
-    weights.has_power * powerSim;
-
-  return Math.round(similarity * 100) / 100;
+  if (error) throw error;
+  return data || [];
 }
 
 /**
- * Batch compare source PCB against multiple targets
- * Returns sorted by similarity descending
+ * Resolve customer station name to master station using aliases
+ * Checks customer-specific aliases first, then global aliases
  */
-export function findSimilarPCBs(
-  source: PCBFeatures,
-  targets: Array<{ id: string; features: PCBFeatures }>
-): Array<{ id: string; similarity: number }> {
-  return targets
-    .map(target => ({
-      id: target.id,
-      similarity: calculatePCBSimilarity(source, target.features)
-    }))
-    .sort((a, b) => b.similarity - a.similarity);
-}
-```
-
-### File 3: `lib/similarity/bom-similarity.ts`
-
-```typescript
-import { BOMSummary } from './types';
-
-/**
- * Calculate BOM similarity using Jaccard similarity for part categories
- * and component count ratios
- */
-export function calculateBOMSimilarity(
-  source: BOMSummary,
-  target: BOMSummary
-): number {
-  const weights = {
-    ic_ratio: 0.25,
-    passive_ratio: 0.10,
-    connector_ratio: 0.15,
-    mcu_match: 0.20,
-    rf_match: 0.15,
-    sensor_match: 0.15,
-  };
-
-  // Count-based similarity
-  const icRatio = ratioSimilarity(source.ic_count, target.ic_count);
-  const passiveRatio = ratioSimilarity(source.passive_count, target.passive_count);
-  const connectorRatio = ratioSimilarity(source.connector_count, target.connector_count);
-
-  // Part number matching (Jaccard similarity)
-  const mcuMatch = jaccardSimilarity(source.mcu_part_numbers, target.mcu_part_numbers);
-  const rfMatch = jaccardSimilarity(source.rf_module_parts, target.rf_module_parts);
-  const sensorMatch = jaccardSimilarity(source.sensor_parts, target.sensor_parts);
-
-  const similarity =
-    weights.ic_ratio * icRatio +
-    weights.passive_ratio * passiveRatio +
-    weights.connector_ratio * connectorRatio +
-    weights.mcu_match * mcuMatch +
-    weights.rf_match * rfMatch +
-    weights.sensor_match * sensorMatch;
-
-  return Math.round(similarity * 100) / 100;
-}
-
-function ratioSimilarity(a: number, b: number): number {
-  if (a === 0 && b === 0) return 1;
-  return 1 - Math.abs(a - b) / Math.max(a, b);
-}
-
-function jaccardSimilarity(a: string[], b: string[]): number {
-  if (a.length === 0 && b.length === 0) return 1;
-  if (a.length === 0 || b.length === 0) return 0;
-  
-  const setA = new Set(a.map(s => s.toUpperCase()));
-  const setB = new Set(b.map(s => s.toUpperCase()));
-  
-  const intersection = [...setA].filter(x => setB.has(x)).length;
-  const union = new Set([...setA, ...setB]).size;
-  
-  return intersection / union;
-}
-
-/**
- * Extract key component categories from raw BOM text
- */
-export function extractBOMFeatures(bomText: string): Partial<BOMSummary> {
-  const lines = bomText.split('\n');
-  
-  const mcuPatterns = /STM32|ESP32|NRF52|PIC|ATMEGA|ARM|CORTEX/gi;
-  const rfPatterns = /WIFI|BT|BLUETOOTH|NRF|SX127|CC1101|LoRa|4G|LTE|GSM/gi;
-  const sensorPatterns = /BME|BMP|MPU|LSM|ICM|SHT|AHT|ACCEL|GYRO|TEMP/gi;
-  
-  const mcu_part_numbers: string[] = [];
-  const rf_module_parts: string[] = [];
-  const sensor_parts: string[] = [];
-  
-  lines.forEach(line => {
-    const mcuMatch = line.match(mcuPatterns);
-    const rfMatch = line.match(rfPatterns);
-    const sensorMatch = line.match(sensorPatterns);
+export async function resolveStationAlias(
+  customerTerm: string,
+  customerId?: string
+): Promise<StationAlias | null> {
+  // 1. Try customer-specific alias first
+  if (customerId) {
+    const { data: customerAlias } = await supabase
+      .from('station_aliases')
+      .select(`
+        *,
+        master:station_master(*)
+      `)
+      .eq('alias_name', customerTerm)
+      .eq('customer_id', customerId)
+      .maybeSingle();
     
-    if (mcuMatch) mcu_part_numbers.push(...mcuMatch);
-    if (rfMatch) rf_module_parts.push(...rfMatch);
-    if (sensorMatch) sensor_parts.push(...sensorMatch);
-  });
+    if (customerAlias) return customerAlias;
+  }
   
-  return {
-    mcu_part_numbers: [...new Set(mcu_part_numbers)],
-    rf_module_parts: [...new Set(rf_module_parts)],
-    sensor_parts: [...new Set(sensor_parts)],
-  };
+  // 2. Try global alias (customer_id is null)
+  const { data: globalAlias } = await supabase
+    .from('station_aliases')
+    .select(`
+      *,
+      master:station_master(*)
+    `)
+    .eq('alias_name', customerTerm)
+    .is('customer_id', null)
+    .maybeSingle();
+  
+  if (globalAlias) return globalAlias;
+  
+  // 3. Try partial match (case-insensitive)
+  const { data: partialMatch } = await supabase
+    .from('station_aliases')
+    .select(`
+      *,
+      master:station_master(*)
+    `)
+    .ilike('alias_name', `%${customerTerm}%`)
+    .limit(1)
+    .maybeSingle();
+  
+  return partialMatch;
+}
+
+/**
+ * Batch resolve multiple station names
+ */
+export async function resolveStationAliases(
+  terms: string[],
+  customerId?: string
+): Promise<Map<string, StationAlias>> {
+  const result = new Map<string, StationAlias>();
+  
+  // Fetch all aliases for this customer + global
+  const { data: aliases } = await supabase
+    .from('station_aliases')
+    .select(`
+      *,
+      master:station_master(*)
+    `)
+    .or(customerId 
+      ? `customer_id.eq.${customerId},customer_id.is.null`
+      : 'customer_id.is.null'
+    );
+  
+  if (!aliases) return result;
+  
+  // Create lookup map
+  const aliasMap = new Map<string, StationAlias>();
+  for (const alias of aliases) {
+    const key = alias.alias_name.toLowerCase();
+    // Prefer customer-specific over global
+    if (!aliasMap.has(key) || alias.customer_id) {
+      aliasMap.set(key, alias);
+    }
+  }
+  
+  // Match terms
+  for (const term of terms) {
+    const alias = aliasMap.get(term.toLowerCase());
+    if (alias) {
+      result.set(term, alias);
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Get stations that should be inferred based on PCB features
+ */
+export async function getInferredStations(
+  features: Record<string, boolean>
+): Promise<StationMaster[]> {
+  // Get all stations with triggers
+  const { data: stations } = await supabase
+    .from('station_master')
+    .select('*')
+    .not('triggers_if', 'eq', '{}');
+  
+  if (!stations) return [];
+  
+  // Filter stations where any trigger matches
+  return stations.filter(station => {
+    const triggers = station.triggers_if || [];
+    return triggers.some(trigger => features[trigger] === true);
+  });
 }
 ```
 
-### File 4: `lib/similarity/station-matcher.ts`
+### File 3: `lib/similarity/station-matcher.ts` (UPDATED)
 
 ```typescript
-import { StationConfig } from './types';
+import { resolveStationAliases } from './db-queries';
+import type { StationConfig, StationMatch } from './types';
 
 /**
- * Compare station configurations between RFQ and reference model
+ * Match RFQ stations against reference model using station_aliases
  */
-export function matchStations(
+export async function matchStations(
   rfqStations: StationConfig[],
-  referenceStations: StationConfig[]
-): {
-  matched: string[];
+  referenceStations: StationConfig[],
+  customerId?: string
+): Promise<{
+  matched: StationMatch[];
   missing: string[];
   extra: string[];
   matchPercentage: number;
-} {
-  const rfqCodes = new Set(rfqStations.map(s => s.station_code.toUpperCase()));
-  const refCodes = new Set(referenceStations.map(s => s.station_code.toUpperCase()));
+}> {
+  // Resolve all customer terms to master codes
+  const allTerms = [
+    ...rfqStations.map(s => s.station_code),
+    ...referenceStations.map(s => s.station_code)
+  ];
   
-  const matched = [...rfqCodes].filter(code => refCodes.has(code));
-  const missing = [...refCodes].filter(code => !rfqCodes.has(code));
-  const extra = [...rfqCodes].filter(code => !refCodes.has(code));
+  const aliasMap = await resolveStationAliases(allTerms, customerId);
   
-  const matchPercentage = refCodes.size > 0 
-    ? Math.round((matched.length / refCodes.size) * 100) 
-    : 0;
+  // Convert to master codes
+  const rfqMasterCodes = new Set<string>();
+  const matched: StationMatch[] = [];
+  
+  for (const station of rfqStations) {
+    const alias = aliasMap.get(station.station_code);
+    if (alias?.master) {
+      rfqMasterCodes.add(alias.master.code);
+      matched.push({
+        customer_term: station.station_code,
+        master_code: alias.master.code,
+        master_name: alias.master.name,
+        confidence: alias.confidence as 'high' | 'medium' | 'low',
+      });
+    } else {
+      // Unknown station - keep as-is
+      rfqMasterCodes.add(station.station_code.toUpperCase());
+      matched.push({
+        customer_term: station.station_code,
+        master_code: station.station_code.toUpperCase(),
+        master_name: station.station_code,
+        confidence: 'low',
+      });
+    }
+  }
+  
+  // Get reference master codes
+  const refMasterCodes = new Set<string>();
+  for (const station of referenceStations) {
+    const alias = aliasMap.get(station.station_code);
+    refMasterCodes.add(alias?.master?.code || station.station_code.toUpperCase());
+  }
+  
+  // Calculate differences
+  const missing = [...refMasterCodes].filter(code => !rfqMasterCodes.has(code));
+  const extra = [...rfqMasterCodes].filter(code => !refMasterCodes.has(code));
+  
+  const matchPercentage = refMasterCodes.size > 0
+    ? Math.round(((refMasterCodes.size - missing.length) / refMasterCodes.size) * 100)
+    : 100;
   
   return { matched, missing, extra, matchPercentage };
 }
 
 /**
- * Map customer-specific station names to standard codes
+ * Normalize a single station term to standard code
+ * Uses database lookup instead of hardcoded mappings
  */
-export function normalizeStationCode(customerTerm: string): {
-  standardCode: string;
-  confidence: 'high' | 'medium' | 'low';
-} {
-  const term = customerTerm.toUpperCase().trim();
+export async function normalizeStationCode(
+  customerTerm: string,
+  customerId?: string
+): Promise<StationMatch> {
+  const { resolveStationAlias } = await import('./db-queries');
+  const alias = await resolveStationAlias(customerTerm, customerId);
   
-  const mappings: Record<string, { codes: string[]; standard: string }> = {
-    'RFT': { codes: ['RF TEST', 'SIGNAL TEST', 'RF VERIFY', 'RADIO TEST', 'WIRELESS'], standard: 'RFT' },
-    'CURRENT': { codes: ['CURRENT TEST', 'POWER LOAD', 'LOAD TEST', 'ELECTRICAL'], standard: 'CURRENT' },
-    'OS_DOWNLOAD': { codes: ['OS DOWNLOAD', 'FW DOWNLOAD', 'FIRMWARE', 'FLASH', 'PROGRAM', 'SW DOWNLOAD'], standard: 'OS_DOWNLOAD' },
-    'VISUAL': { codes: ['VISUAL', 'INSPECTION', 'QC CHECK', 'APPEARANCE'], standard: 'VISUAL' },
-    'CAL': { codes: ['CAL', 'CALIBRATION', 'TRIM', 'ALIGNMENT'], standard: 'CAL' },
-    'MMI': { codes: ['MMI', 'HMI', 'UI TEST', 'TOUCH TEST', 'DISPLAY TEST'], standard: 'MMI' },
-    'MBT': { codes: ['MBT', 'BENCH', 'REWORK', 'REPAIR', 'DEBUG'], standard: 'MBT' },
-    'T_GREASE': { codes: ['GREASE', 'THERMAL', 'TIM', 'PASTE'], standard: 'T_GREASE' },
-    'SHIELD': { codes: ['SHIELD', 'SHIELDING', 'EMI', 'RF COVER'], standard: 'SHIELD' },
+  if (alias?.master) {
+    return {
+      customer_term: customerTerm,
+      master_code: alias.master.code,
+      master_name: alias.master.name,
+      confidence: alias.confidence as 'high' | 'medium' | 'low',
+    };
+  }
+  
+  return {
+    customer_term: customerTerm,
+    master_code: customerTerm.toUpperCase(),
+    master_name: customerTerm,
+    confidence: 'low',
   };
-  
-  // Exact match first
-  for (const [standard, { codes }] of Object.entries(mappings)) {
-    if (codes.includes(term) || term === standard) {
-      return { standardCode: standard, confidence: 'high' };
-    }
-  }
-  
-  // Partial match
-  for (const [standard, { codes }] of Object.entries(mappings)) {
-    if (codes.some(code => term.includes(code) || code.includes(term))) {
-      return { standardCode: standard, confidence: 'medium' };
-    }
-  }
-  
-  // Unknown - return as-is
-  return { standardCode: term, confidence: 'low' };
 }
 ```
 
-### File 5: `lib/similarity/inference-engine.ts`
+### File 4: `lib/similarity/inference-engine.ts` (UPDATED)
 
 ```typescript
-import { PCBFeatures, StationConfig, InferenceResult } from './types';
+import { getInferredStations, getMasterStations } from './db-queries';
+import type { PCBFeatures, InferenceResult, StationMaster } from './types';
 
 /**
- * Inference rules based on EMS_Test_Line_Reference_Guide.md Section 7.2
+ * Convert PCB features to trigger flags
  */
-const INFERENCE_RULES = [
-  {
-    name: 'RF_RULE',
-    condition: (f: PCBFeatures) => f.has_rf,
-    stations: ['RFT', 'CAL', 'SHIELD'],
-    reason: 'Product has RF/wireless components',
-  },
-  {
-    name: 'MCU_RULE', 
-    condition: (f: PCBFeatures) => f.smt_component_count > 50, // Likely has MCU
-    stations: ['OS_DOWNLOAD', 'MBT', 'ICT'],
-    reason: 'Product likely has MCU requiring firmware',
-  },
-  {
-    name: 'SENSOR_RULE',
-    condition: (f: PCBFeatures) => f.has_sensors,
-    stations: ['CAL'],
-    reason: 'Product has sensors requiring calibration',
-  },
-  {
-    name: 'POWER_RULE',
-    condition: (f: PCBFeatures) => f.has_power_stage,
-    stations: ['CURRENT', 'T_GREASE'],
-    reason: 'Product has power stage (>5W dissipation expected)',
-  },
-  {
-    name: 'BGA_RULE',
-    condition: (f: PCBFeatures) => f.bga_count > 0,
-    stations: ['AXI', 'UNDERFILL'],
-    reason: 'Product has BGA/CSP packages',
-  },
-  {
-    name: 'DISPLAY_RULE',
-    condition: (f: PCBFeatures) => f.has_display_connector,
-    stations: ['MMI', 'VISUAL'],
-    reason: 'Product has display interface',
-  },
-  {
-    name: 'BATTERY_RULE',
-    condition: (f: PCBFeatures) => f.has_battery_connector,
-    stations: ['CURRENT'],
-    reason: 'Product is battery-powered',
-  },
-  {
-    name: 'MULTICAVITY_RULE',
-    condition: (f: PCBFeatures) => f.cavity_count > 1,
-    stations: ['ROUTER'],
-    reason: 'Multi-cavity panel requires router/depaneling',
-  },
-];
+function featuresToTriggers(features: PCBFeatures): Record<string, boolean> {
+  return {
+    has_rf: features.has_rf,
+    has_wireless: features.has_rf,
+    has_wifi: features.has_rf,
+    has_bluetooth: features.has_rf,
+    has_cellular: features.has_rf,
+    has_sensors: features.has_sensors,
+    has_adc: features.has_sensors,
+    has_display: features.has_display_connector,
+    has_touchscreen: features.has_display_connector,
+    has_backlight: features.has_display_connector,
+    has_battery: features.has_battery_connector,
+    has_power_stage: features.has_power_stage,
+    has_high_voltage: features.has_power_stage,
+    has_bga: features.bga_count > 0,
+    has_fine_pitch: features.fine_pitch_count > 5,
+    has_mcu: features.smt_component_count > 50,
+    has_firmware: features.smt_component_count > 50,
+    is_pcba: true,
+    is_panel: features.cavity_count > 1,
+    multi_cavity: features.cavity_count > 1,
+    is_subboard: false,
+    high_volume: false,
+  };
+}
 
 /**
  * Infer missing stations based on PCB features
+ * Uses station_master.triggers_if from database
  */
-export function inferMissingStations(
+export async function inferMissingStations(
   features: PCBFeatures,
-  existingStations: string[]
-): InferenceResult {
-  const existing = new Set(existingStations.map(s => s.toUpperCase()));
-  const recommended: StationConfig[] = [];
+  existingStationCodes: string[]
+): Promise<InferenceResult> {
+  const triggers = featuresToTriggers(features);
+  const existing = new Set(existingStationCodes.map(s => s.toUpperCase()));
+  
+  // Get stations from DB that match triggers
+  const inferredStations = await getInferredStations(triggers);
+  
+  // Filter out already existing
+  const recommended: StationMaster[] = [];
   const rulesApplied: string[] = [];
-  const warnings: string[] = [];
   
-  let sequence = existingStations.length + 1;
-  
-  for (const rule of INFERENCE_RULES) {
-    if (rule.condition(features)) {
-      for (const station of rule.stations) {
-        if (!existing.has(station)) {
-          recommended.push({
-            board_type: 'Inferred',
-            station_code: station,
-            sequence: sequence++,
-            manpower: 1,
-          });
-          existing.add(station);
-          rulesApplied.push(`${rule.name}: ${rule.reason} → Added ${station}`);
-        }
-      }
+  for (const station of inferredStations) {
+    if (!existing.has(station.code)) {
+      recommended.push(station);
+      
+      // Build rule explanation
+      const matchedTriggers = station.triggers_if.filter(t => triggers[t]);
+      rulesApplied.push(
+        `${station.code}: Triggered by [${matchedTriggers.join(', ')}] → ${station.description}`
+      );
     }
   }
   
-  // Add warnings for potential issues
-  if (features.fine_pitch_count > 5 && !existing.has('AOI')) {
-    warnings.push('High fine-pitch component count but no AOI station - consider adding');
+  // Generate warnings
+  const warnings: string[] = [];
+  
+  if (features.bga_count > 0 && !existing.has('AXI') && !recommended.find(s => s.code === 'AXI')) {
+    warnings.push('BGA present but no AXI station - X-ray inspection recommended');
   }
   
-  if (features.bga_count > 0 && !existing.has('AXI')) {
-    warnings.push('BGA present but no AXI station - solder joint inspection recommended');
+  if (features.fine_pitch_count > 5 && !existing.has('AOI') && !recommended.find(s => s.code === 'AOI')) {
+    warnings.push('Many fine-pitch components but no AOI - automated inspection recommended');
+  }
+  
+  if (features.cavity_count > 1 && !existing.has('ROUTER') && !recommended.find(s => s.code === 'ROUTER')) {
+    warnings.push('Multi-cavity panel but no ROUTER - depaneling required');
   }
   
   return {
     recommended_stations: recommended,
-    inference_rules_applied: rulesApplied,
+    rules_applied: rulesApplied,
     warnings,
   };
 }
 
 /**
- * Get default station sequence based on EMS best practices
+ * Get optimal station sequence based on EMS best practices
  */
-export function getDefaultStationOrder(): string[] {
-  return [
-    // Early detection
-    'ICT', 'AOI', 'AXI',
-    // Programming
-    'OS_DOWNLOAD',
-    // Functional
-    'MBT', 'FCT',
-    // Calibration
-    'CAL',
-    // RF (after calibration)
-    'RFT', 'RFT_2G4G',
-    // Interface
-    'MMI', 'BLMMI',
-    // Power
-    'CURRENT', 'PCB_CURRENT',
-    // Assembly (after all electrical tests)
-    'UNDERFILL', 'T_GREASE', 'SHIELD',
-    // Router (after assembly, before final test)
-    'ROUTER',
-    // Final QC
-    'VISUAL', 'FQC', 'OQC',
-    // Packing
-    'LABEL', 'PACKING',
-  ];
+export async function getOptimalSequence(): Promise<string[]> {
+  const stations = await getMasterStations();
+  
+  // Define category order
+  const categoryOrder = ['Inspection', 'Programming', 'Testing', 'Assembly'];
+  
+  // Sort by category, then by typical_uph (faster first)
+  return stations
+    .sort((a, b) => {
+      const catDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
+      if (catDiff !== 0) return catDiff;
+      return (b.typical_uph || 0) - (a.typical_uph || 0);
+    })
+    .map(s => s.code);
 }
 ```
 
-### File 6: `lib/similarity/index.ts`
+### File 5: `lib/similarity/index.ts` (UPDATED)
 
 ```typescript
-import { supabase } from '../supabase/client';
+import { supabase } from '@/lib/supabase/client';
 import { calculatePCBSimilarity } from './pcb-similarity';
 import { calculateBOMSimilarity } from './bom-similarity';
 import { matchStations, normalizeStationCode } from './station-matcher';
-import { inferMissingStations } from './inference-engine';
-import type { PCBFeatures, BOMSummary, StationConfig, SimilarityResult } from './types';
+import { inferMissingStations, getOptimalSequence } from './inference-engine';
+import { getMasterStations, resolveStationAliases } from './db-queries';
+import type { 
+  PCBFeatures, 
+  BOMSummary, 
+  StationConfig, 
+  SimilarityResult,
+  StationMaster 
+} from './types';
 
 export * from './types';
-export { normalizeStationCode, inferMissingStations };
+export { 
+  normalizeStationCode, 
+  inferMissingStations,
+  getMasterStations,
+  resolveStationAliases,
+  getOptimalSequence,
+};
 
 const PCB_WEIGHT = 0.6;
 const BOM_WEIGHT = 0.4;
@@ -494,18 +500,20 @@ export async function findSimilarModels(
   rfqPCB: PCBFeatures,
   rfqBOM: BOMSummary,
   rfqStations: StationConfig[],
+  customerId?: string,
   topN: number = 5
 ): Promise<SimilarityResult[]> {
-  // Fetch all active models with their features
+  // Fetch all active models with features
   const { data: models, error } = await supabase
     .from('models')
     .select(`
       id,
       code,
-      customer:customers(code),
+      customer:customers(id, code, name),
       stations:model_stations(
         board_type,
-        machine:machines(code)
+        sequence,
+        machine:station_master(id, code, name, category)
       ),
       pcb:pcb_features(*),
       bom:bom_data(*)
@@ -518,15 +526,16 @@ export async function findSimilarModels(
   const results: SimilarityResult[] = [];
 
   for (const model of models) {
-    // Skip if no PCB features
     if (!model.pcb || model.pcb.length === 0) continue;
 
     const modelPCB = model.pcb[0] as unknown as PCBFeatures;
     const modelBOM = (model.bom?.[0] || {}) as unknown as BOMSummary;
-    const modelStations = model.stations.map((s: any) => ({
+    
+    // Convert model stations to StationConfig format
+    const modelStations: StationConfig[] = model.stations.map((s: any) => ({
       board_type: s.board_type,
       station_code: s.machine?.code || '',
-      sequence: 0,
+      sequence: s.sequence,
     }));
 
     // Calculate similarities
@@ -534,8 +543,12 @@ export async function findSimilarModels(
     const bomSim = calculateBOMSimilarity(rfqBOM, modelBOM);
     const overallSim = (PCB_WEIGHT * pcbSim) + (BOM_WEIGHT * bomSim);
 
-    // Match stations
-    const stationMatch = matchStations(rfqStations, modelStations);
+    // Match stations using aliases
+    const stationMatch = await matchStations(
+      rfqStations, 
+      modelStations,
+      customerId
+    );
 
     // Determine confidence
     let confidence: 'high' | 'medium' | 'low' = 'low';
@@ -545,10 +558,10 @@ export async function findSimilarModels(
     results.push({
       model_id: model.id,
       model_code: model.code,
-      customer: (model.customer as any)?.code || 'Unknown',
-      pcb_similarity: pcbSim,
-      bom_similarity: bomSim,
-      overall_similarity: overallSim,
+      customer: (model.customer as any)?.name || 'Unknown',
+      pcb_similarity: Math.round(pcbSim * 100) / 100,
+      bom_similarity: Math.round(bomSim * 100) / 100,
+      overall_similarity: Math.round(overallSim * 100) / 100,
       matched_stations: stationMatch.matched,
       missing_stations: stationMatch.missing,
       extra_stations: stationMatch.extra,
@@ -556,70 +569,47 @@ export async function findSimilarModels(
     });
   }
 
-  // Sort by overall similarity descending
   return results
     .sort((a, b) => b.overall_similarity - a.overall_similarity)
     .slice(0, topN);
 }
 
 /**
- * Calculate and cache similarity between two specific models
+ * Full RFQ analysis: similarity + inference
  */
-export async function calculateAndCacheSimilarity(
-  sourceModelId: string,
-  targetModelId: string
-): Promise<number> {
-  // Check cache first
-  const { data: cached } = await supabase
-    .from('similarity_cache')
-    .select('overall_similarity')
-    .eq('source_model_id', sourceModelId)
-    .eq('target_model_id', targetModelId)
-    .maybeSingle();
-
-  if (cached) return cached.overall_similarity;
-
-  // Fetch both models' features
-  const { data: models } = await supabase
-    .from('models')
-    .select(`
-      id,
-      pcb:pcb_features(*),
-      bom:bom_data(*)
-    `)
-    .in('id', [sourceModelId, targetModelId]);
-
-  if (!models || models.length !== 2) return 0;
-
-  const source = models.find(m => m.id === sourceModelId);
-  const target = models.find(m => m.id === targetModelId);
-
-  if (!source?.pcb?.[0] || !target?.pcb?.[0]) return 0;
-
-  const pcbSim = calculatePCBSimilarity(
-    source.pcb[0] as unknown as PCBFeatures,
-    target.pcb[0] as unknown as PCBFeatures
-  );
-  
-  const bomSim = calculateBOMSimilarity(
-    (source.bom?.[0] || {}) as unknown as BOMSummary,
-    (target.bom?.[0] || {}) as unknown as BOMSummary
+export async function analyzeRFQ(
+  rfqPCB: PCBFeatures,
+  rfqBOM: BOMSummary,
+  rfqStations: StationConfig[],
+  customerId?: string
+) {
+  // Find similar models
+  const similarModels = await findSimilarModels(
+    rfqPCB, 
+    rfqBOM, 
+    rfqStations, 
+    customerId, 
+    5
   );
 
-  const overall = (PCB_WEIGHT * pcbSim) + (BOM_WEIGHT * bomSim);
+  // Infer missing stations
+  const existingCodes = rfqStations.map(s => s.station_code);
+  const inference = await inferMissingStations(rfqPCB, existingCodes);
 
-  // Cache the result
-  await supabase.from('similarity_cache').upsert({
-    source_model_id: sourceModelId,
-    target_model_id: targetModelId,
-    pcb_similarity: pcbSim,
-    bom_similarity: bomSim,
-    overall_similarity: overall,
-    pcb_weight: PCB_WEIGHT,
-    bom_weight: BOM_WEIGHT,
-  });
+  // Get optimal sequence
+  const optimalSequence = await getOptimalSequence();
 
-  return overall;
+  return {
+    similar_models: similarModels,
+    top_match: similarModels[0] || null,
+    inference,
+    optimal_sequence: optimalSequence,
+    rfq_coverage: {
+      stations_provided: rfqStations.length,
+      stations_inferred: inference.recommended_stations.length,
+      warnings_count: inference.warnings.length,
+    }
+  };
 }
 ```
 
@@ -627,38 +617,41 @@ export async function calculateAndCacheSimilarity(
 
 ## ✅ ACCEPTANCE CRITERIA
 
-- [ ] PCB similarity calculates correctly (test with mock data)
-- [ ] BOM similarity handles empty/partial data gracefully
-- [ ] Station mapping normalizes customer terms to standard codes
-- [ ] Inference engine applies all rules from reference guide
-- [ ] `findSimilarModels()` returns sorted results
-- [ ] Similarity cache prevents redundant calculations
-- [ ] All functions have proper TypeScript types
-- [ ] Unit tests pass for edge cases
+- [ ] `resolveStationAlias()` finds customer-specific aliases first
+- [ ] `matchStations()` uses database aliases, not hardcoded mappings
+- [ ] `inferMissingStations()` uses `triggers_if` from station_master
+- [ ] `findSimilarModels()` joins with station_master correctly
+- [ ] Unknown stations flagged with `confidence: 'low'`
+- [ ] All 257 aliases in database are recognized
 
 ---
 
 ## 🧪 TEST CASES
 
 ```typescript
-// Test PCB similarity
-const pcb1 = { length_mm: 100, width_mm: 50, layer_count: 4, cavity_count: 2, ... };
-const pcb2 = { length_mm: 98, width_mm: 52, layer_count: 4, cavity_count: 2, ... };
-// Expected: similarity > 0.90 (very similar)
+// Test alias resolution
+const alias = await resolveStationAlias('RFT1', 'customer-uuid');
+// Expected: { master_code: 'RFT', confidence: 'high' }
 
-// Test inference
-const features = { has_rf: true, has_sensors: true, bga_count: 2, cavity_count: 4 };
-const existing = ['MBT', 'CAL'];
-const result = inferMissingStations(features, existing);
-// Expected: RFT, SHIELD, AXI, UNDERFILL, ROUTER added
+// Test batch resolution  
+const map = await resolveStationAliases(['MBT', 'Thermal_Gress', 'Unknown_Station']);
+// Expected: MBT → MBT, Thermal_Gress → T_GREASE, Unknown_Station → not found
 
-// Test station mapping
-const mapped = normalizeStationCode('Signal Verify Test');
-// Expected: { standardCode: 'RFT', confidence: 'medium' }
+// Test inference with triggers
+const features = { has_rf: true, bga_count: 2, cavity_count: 4 };
+const result = await inferMissingStations(features, ['MBT']);
+// Expected: RFT, CAL, SHIELD, AXI, UNDERFILL, ROUTER recommended
+
+// Test full analysis
+const analysis = await analyzeRFQ(pcbFeatures, bomSummary, stations, customerId);
+// Expected: similar_models[], inference, optimal_sequence
 ```
 
 ---
 
-## 🚀 NEXT PHASE
+## 🔗 DATABASE DEPENDENCIES
 
-After similarity engine works, proceed to PHASE 3: File Parsers (Excel BOM, PDF drawings)
+This phase requires:
+- `station_master` table with 38 stations ✅
+- `station_aliases` table with 257 mappings ✅
+- `customers` table with 15 customers ✅

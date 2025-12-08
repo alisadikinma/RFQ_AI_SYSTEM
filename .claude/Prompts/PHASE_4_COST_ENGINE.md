@@ -12,6 +12,8 @@ Location: `D:\Projects\RFQ_AI_SYSTEM`
 
 **Reference:** EMS_Test_Line_Reference_Guide.md Section 9 - Cost Model
 
+**Database:** Uses `station_master` table (NOT deprecated `machines` table)
+
 ---
 
 ## 🏗️ ARCHITECTURE
@@ -157,17 +159,20 @@ const FIXTURE_COSTS: Record<string, { base: number; max: number; vendor: string 
   ICT: { base: 15000, max: 25000, vendor: 'CheckSum/Keysight' },
   FCT: { base: 10000, max: 20000, vendor: 'Custom/NI' },
   RFT: { base: 20000, max: 30000, vendor: 'R&S/Keysight' },
-  RFT1: { base: 20000, max: 30000, vendor: 'R&S/Keysight' },
   RFT_2G4G: { base: 25000, max: 35000, vendor: 'R&S/Anritsu' },
+  RFT_5G: { base: 30000, max: 45000, vendor: 'R&S/Keysight' },
   CAL: { base: 8000, max: 15000, vendor: 'Keysight' },
   MBT: { base: 5000, max: 10000, vendor: 'Local' },
   MMI: { base: 8000, max: 15000, vendor: 'Custom' },
   BLMMI: { base: 8000, max: 15000, vendor: 'Custom' },
+  SUBMMI: { base: 6000, max: 12000, vendor: 'Custom' },
   CURRENT: { base: 5000, max: 10000, vendor: 'Keysight/Chroma' },
   PCB_CURRENT: { base: 3000, max: 8000, vendor: 'Local' },
+  HV_TEST: { base: 8000, max: 15000, vendor: 'Chroma' },
+  WIFI_BT: { base: 15000, max: 25000, vendor: 'LitePoint' },
   
   // Inspection
-  AOI: { base: 0, max: 0, vendor: 'N/A (equipment only)' },  // No fixture needed
+  AOI: { base: 0, max: 0, vendor: 'N/A (equipment only)' },
   AXI: { base: 0, max: 0, vendor: 'N/A (equipment only)' },
   VISUAL: { base: 2000, max: 5000, vendor: 'Local' },
   FQC: { base: 3000, max: 8000, vendor: 'Local' },
@@ -178,6 +183,8 @@ const FIXTURE_COSTS: Record<string, { base: number; max: number; vendor: string 
   T_GREASE: { base: 2000, max: 5000, vendor: 'Local' },
   SHIELD: { base: 2000, max: 5000, vendor: 'Local' },
   ROUTER: { base: 5000, max: 10000, vendor: 'LPKF/Cencorp' },
+  CURING: { base: 1000, max: 3000, vendor: 'Local' },
+  BAKING: { base: 1000, max: 3000, vendor: 'Local' },
   
   // Programming
   OS_DOWNLOAD: { base: 3000, max: 8000, vendor: 'Segger/Local' },
@@ -192,15 +199,13 @@ const FIXTURE_COSTS: Record<string, { base: number; max: number; vendor: string 
 export function calculateFixtureCost(
   station: StationCostInput,
   expectedVolume: number,
-  complexityFactor: number = 1.0  // 1.0 = normal, 1.5 = complex
+  complexityFactor: number = 1.0
 ): FixtureCostEstimate {
-  const config = FIXTURE_COSTS[station.station_code.toUpperCase()] || FIXTURE_COSTS.DEFAULT;
+  const code = station.station_code.toUpperCase();
+  const config = FIXTURE_COSTS[code] || FIXTURE_COSTS.DEFAULT;
   
-  // Adjust for complexity
   const unitCost = config.base + (config.max - config.base) * (complexityFactor - 1);
   const totalCost = unitCost * station.quantity;
-  
-  // Amortize over expected volume
   const amortizedPerUnit = expectedVolume > 0 ? totalCost / expectedVolume : totalCost;
   
   return {
@@ -252,19 +257,19 @@ export function calculateTotalFixtureInvestment(
 
 ```typescript
 import type { ManpowerEstimate, StationCostInput } from './types';
-import { supabase } from '../supabase/client';
+import { supabase } from '@/lib/supabase/client';
 
 /**
- * Get operator ratio from machines table or use default
+ * Get operator ratio from station_master table
  */
-async function getOperatorRatio(stationCode: string): Promise<number> {
+async function getOperatorRatioFromDB(stationCode: string): Promise<number | null> {
   const { data } = await supabase
-    .from('machines')
+    .from('station_master')  // FIXED: was 'machines'
     .select('operator_ratio')
     .eq('code', stationCode.toUpperCase())
     .maybeSingle();
   
-  return data?.operator_ratio || 1.0;
+  return data?.operator_ratio || null;
 }
 
 /**
@@ -280,10 +285,11 @@ const DEFAULT_RATIOS: Record<string, number> = {
   
   // Semi-automated (1:1-2)
   RFT: 1.0,
-  RFT1: 1.0,
   RFT_2G4G: 1.0,
+  RFT_5G: 1.0,
   FCT: 1.0,
   CAL: 1.0,
+  WIFI_BT: 1.0,
   
   // Manual (1:1)
   MBT: 1.0,
@@ -292,13 +298,18 @@ const DEFAULT_RATIOS: Record<string, number> = {
   OQC: 1.0,
   MMI: 1.0,
   BLMMI: 1.0,
+  SUBMMI: 1.0,
   CURRENT: 1.0,
+  PCB_CURRENT: 1.0,
+  HV_TEST: 1.0,
   
   // Assembly
   UNDERFILL: 1.0,
   T_GREASE: 1.0,
   SHIELD: 1.0,
-  OS_DOWNLOAD: 1.0,
+  OS_DOWNLOAD: 0.5,
+  CURING: 0.5,
+  BAKING: 0.5,
   
   DEFAULT: 1.0,
 };
@@ -308,13 +319,16 @@ const DEFAULT_RATIOS: Record<string, number> = {
  */
 export async function calculateStationManpower(
   station: StationCostInput,
-  shiftCount: number = 1  // 1, 2, or 3 shifts
+  shiftCount: number = 1
 ): Promise<ManpowerEstimate> {
-  const ratio = DEFAULT_RATIOS[station.station_code.toUpperCase()] || DEFAULT_RATIOS.DEFAULT;
+  // Try DB first, fallback to default
+  const dbRatio = await getOperatorRatioFromDB(station.station_code);
+  const ratio = dbRatio ?? DEFAULT_RATIOS[station.station_code.toUpperCase()] ?? DEFAULT_RATIOS.DEFAULT;
+  
   const operatorsPerStation = station.manpower || Math.ceil(ratio);
   const totalOperators = operatorsPerStation * station.quantity;
   
-  // Shift coverage multiplier (account for days off, breaks)
+  // Shift coverage multiplier
   const shiftMultiplier = shiftCount === 1 ? 1.0 : shiftCount === 2 ? 2.2 : 3.5;
   
   return {
@@ -349,7 +363,7 @@ export async function calculateTotalManpower(
   const totalOperators = estimates.reduce((sum, e) => sum + e.total_operators, 0);
   const totalHeadcount = estimates.reduce((sum, e) => sum + e.total_headcount, 0);
   
-  // Assume $3.50/hr, 200 hrs/month
+  // $3.50/hr, 200 hrs/month
   const directLaborCostMonthly = totalHeadcount * 3.5 * 200;
   
   return {
@@ -365,7 +379,20 @@ export async function calculateTotalManpower(
 
 ```typescript
 import type { CapacityEstimate, StationCostInput } from './types';
-import { supabase } from '../supabase/client';
+import { supabase } from '@/lib/supabase/client';
+
+/**
+ * Get cycle time from station_master table
+ */
+async function getCycleTimeFromDB(stationCode: string): Promise<number | null> {
+  const { data } = await supabase
+    .from('station_master')  // FIXED: was 'machines'
+    .select('typical_cycle_time_sec')
+    .eq('code', stationCode.toUpperCase())
+    .maybeSingle();
+  
+  return data?.typical_cycle_time_sec || null;
+}
 
 /**
  * Default cycle times by station (seconds)
@@ -376,12 +403,15 @@ const DEFAULT_CYCLE_TIMES: Record<string, number> = {
   MBT: 24,
   CAL: 18,
   RFT: 40,
-  RFT1: 40,
   RFT_2G4G: 60,
+  RFT_5G: 45,
   MMI: 25,
   BLMMI: 25,
+  SUBMMI: 20,
   CURRENT: 18,
   PCB_CURRENT: 15,
+  HV_TEST: 20,
+  WIFI_BT: 35,
   ICT: 3,
   FCT: 60,
   VISUAL: 20,
@@ -393,21 +423,24 @@ const DEFAULT_CYCLE_TIMES: Record<string, number> = {
   T_GREASE: 15,
   SHIELD: 20,
   ROUTER: 12,
+  CURING: 60,
+  BAKING: 60,
   DEFAULT: 30,
 };
 
 /**
  * Calculate capacity for single station
  */
-export function calculateStationCapacity(
+export async function calculateStationCapacity(
   station: StationCostInput,
   targetUPH: number
-): CapacityEstimate {
-  const cycleTime = DEFAULT_CYCLE_TIMES[station.station_code.toUpperCase()] || DEFAULT_CYCLE_TIMES.DEFAULT;
+): Promise<CapacityEstimate> {
+  // Try DB first, fallback to default
+  const dbCycleTime = await getCycleTimeFromDB(station.station_code);
+  const cycleTime = dbCycleTime ?? DEFAULT_CYCLE_TIMES[station.station_code.toUpperCase()] ?? DEFAULT_CYCLE_TIMES.DEFAULT;
+  
   const uphPerStation = Math.floor(3600 / cycleTime);
   const totalUPH = uphPerStation * station.quantity;
-  
-  // Utilization = how much of capacity is used
   const utilization = Math.min((targetUPH / totalUPH) * 100, 100);
   const isBottleneck = totalUPH < targetUPH;
   
@@ -425,19 +458,24 @@ export function calculateStationCapacity(
 /**
  * Calculate line capacity and identify bottleneck
  */
-export function calculateLineCapacity(
+export async function calculateLineCapacity(
   stations: StationCostInput[],
   targetUPH: number
-): {
+): Promise<{
   estimates: CapacityEstimate[];
   effectiveUPH: number;
   bottleneckStation: string;
   lineUtilization: number;
   recommendation: string;
-} {
-  const estimates = stations.map(s => calculateStationCapacity(s, targetUPH));
+}> {
+  const estimates: CapacityEstimate[] = [];
   
-  // Line speed is limited by slowest station
+  for (const station of stations) {
+    const estimate = await calculateStationCapacity(station, targetUPH);
+    estimates.push(estimate);
+  }
+  
+  // Line speed limited by slowest station
   const bottleneck = estimates.reduce((min, e) => 
     e.total_uph < min.total_uph ? e : min
   );
@@ -445,15 +483,14 @@ export function calculateLineCapacity(
   const effectiveUPH = bottleneck.total_uph;
   const lineUtilization = Math.round((effectiveUPH / targetUPH) * 100);
   
-  // Generate recommendation
   let recommendation = '';
   if (effectiveUPH < targetUPH) {
     const additionalNeeded = Math.ceil(targetUPH / bottleneck.uph_per_station) - bottleneck.station_qty;
     recommendation = `Add ${additionalNeeded} more ${bottleneck.station_code} station(s) to meet target UPH`;
   } else if (lineUtilization < 70) {
-    recommendation = 'Line is under-utilized. Consider reducing parallel stations or increasing target volume.';
+    recommendation = 'Line under-utilized. Consider reducing parallel stations.';
   } else {
-    recommendation = 'Line capacity is well-balanced.';
+    recommendation = 'Line capacity well-balanced.';
   }
   
   return {
@@ -499,14 +536,17 @@ const EQUIPMENT_COSTS: Record<string, number> = {
   ICT: 80000,
   FCT: 50000,
   RFT: 120000,
-  RFT1: 120000,
   RFT_2G4G: 150000,
+  RFT_5G: 180000,
   CAL: 40000,
   MBT: 15000,
   MMI: 30000,
   BLMMI: 30000,
+  SUBMMI: 25000,
   CURRENT: 25000,
   PCB_CURRENT: 15000,
+  HV_TEST: 35000,
+  WIFI_BT: 80000,
   AOI: 100000,
   AXI: 200000,
   VISUAL: 5000,
@@ -517,12 +557,11 @@ const EQUIPMENT_COSTS: Record<string, number> = {
   SHIELD: 15000,
   ROUTER: 80000,
   OS_DOWNLOAD: 10000,
+  CURING: 15000,
+  BAKING: 20000,
   DEFAULT: 20000,
 };
 
-/**
- * Installation cost as percentage of equipment
- */
 const INSTALLATION_PERCENT = 0.05;
 
 /**
@@ -619,7 +658,7 @@ export async function calculateCostBreakdown(
   // Calculate sub-components
   const fixture = calculateTotalFixtureInvestment(stations, targetVolumeMonthly * 12);
   const manpower = await calculateTotalManpower(stations, 1);
-  const capacity = calculateLineCapacity(stations, targetUPH);
+  const capacity = await calculateLineCapacity(stations, targetUPH);
   
   const fixtureMap = new Map(fixture.estimates.map(e => [e.station_code, e.fixture_unit_cost_usd]));
   const investment = calculateTotalInvestment(stations, fixtureMap);
@@ -643,7 +682,7 @@ export async function calculateCostBreakdown(
   const monthlyDepreciation = investment.totalEquipment / 60;
   const testCostPerUnit = actualMonthlyVolume > 0 ? monthlyDepreciation / actualMonthlyVolume : 0;
   
-  // Total per-unit cost (excluding material & process - those come from reference model)
+  // Total per-unit cost
   const totalCostPerUnit = laborCostPerUnit + overheadPerUnit + testCostPerUnit + fixture.amortizedPerUnit;
   
   // Add margin
@@ -651,8 +690,8 @@ export async function calculateCostBreakdown(
   const suggestedPrice = totalCostPerUnit * marginMultiplier;
   
   return {
-    material_cost_per_unit: 0,  // To be filled from reference model
-    process_cost_per_unit: 0,   // To be filled from reference model
+    material_cost_per_unit: 0,
+    process_cost_per_unit: 0,
     labor_cost_per_unit: Math.round(laborCostPerUnit * 100) / 100,
     overhead_cost_per_unit: Math.round(overheadPerUnit * 100) / 100,
     test_cost_per_unit: Math.round(testCostPerUnit * 100) / 100,
@@ -682,7 +721,7 @@ export function assessRisks(
   capacity: { lineUtilization: number; bottleneckStation: string },
   hasRF: boolean,
   hasBGA: boolean,
-  hasFineP itch: boolean
+  hasFinePitch: boolean  // FIXED: was 'hasFineP itch'
 ): RiskAssessment {
   const factors: RiskFactor[] = [];
   
@@ -690,7 +729,7 @@ export function assessRisks(
   if (capacity.lineUtilization > 90) {
     factors.push({
       category: 'Capacity',
-      description: 'Line utilization exceeds 90% - no buffer for yield loss',
+      description: 'Line utilization >90% - no buffer for yield loss',
       score: 4,
       mitigation: 'Add parallel stations or reduce target volume',
     });
@@ -703,7 +742,8 @@ export function assessRisks(
   }
   
   // Test coverage risk
-  const hasRFStation = stations.some(s => s.station_code.includes('RFT'));
+  const stationCodes = stations.map(s => s.station_code.toUpperCase());
+  const hasRFStation = stationCodes.some(c => c.includes('RFT'));
   if (hasRF && !hasRFStation) {
     factors.push({
       category: 'Test Coverage',
@@ -714,7 +754,7 @@ export function assessRisks(
   }
   
   // BGA risk
-  const hasAXI = stations.some(s => s.station_code === 'AXI');
+  const hasAXI = stationCodes.includes('AXI');
   if (hasBGA && !hasAXI) {
     factors.push({
       category: 'Quality',
@@ -725,8 +765,8 @@ export function assessRisks(
   }
   
   // Fine pitch risk
-  const hasAOI = stations.some(s => s.station_code === 'AOI');
-  if (hasFineP itch && !hasAOI) {
+  const hasAOI = stationCodes.includes('AOI');
+  if (hasFinePitch && !hasAOI) {
     factors.push({
       category: 'Quality',
       description: 'Fine-pitch components without AOI',
@@ -735,12 +775,12 @@ export function assessRisks(
     });
   }
   
-  // NPI yield risk (new product)
+  // NPI yield risk
   factors.push({
     category: 'NPI',
-    description: 'New product introduction - expect lower initial yield',
+    description: 'New product - expect lower initial yield',
     score: 2,
-    mitigation: 'Plan for 85-90% FPY initially, improve over ramp',
+    mitigation: 'Plan for 85-90% FPY initially',
   });
   
   // Calculate total
@@ -787,6 +827,7 @@ export { calculateCostBreakdown, assessRisks } from './cost-breakdown';
 - [ ] Investment breakdown sums correctly
 - [ ] Risk assessment covers all major factors
 - [ ] Cost per unit reasonable for EMS industry
+- [ ] Uses `station_master` table (NOT deprecated `machines`)
 
 ---
 
@@ -797,7 +838,7 @@ export { calculateCostBreakdown, assessRisks } from './cost-breakdown';
 const stations = [
   { station_code: 'MBT', quantity: 2, manpower: 2 },
   { station_code: 'CAL', quantity: 1, manpower: 1 },
-  { station_code: 'RFT1', quantity: 2, manpower: 2 },
+  { station_code: 'RFT', quantity: 2, manpower: 2 },
   { station_code: 'MMI', quantity: 1, manpower: 1 },
   { station_code: 'CURRENT', quantity: 1, manpower: 1 },
   { station_code: 'SHIELD', quantity: 1, manpower: 1 },
@@ -806,11 +847,5 @@ const stations = [
 ];
 
 const result = await calculateCostBreakdown(stations, 200, 10000);
-// Expected: bottleneck = RFT1, total MP ~12, investment ~$400-500K
+// Expected: bottleneck = RFT, total MP ~12, investment ~$400-500K
 ```
-
----
-
-## 🚀 NEXT PHASE
-
-After cost engine works, proceed to PHASE 5: Integration & Testing

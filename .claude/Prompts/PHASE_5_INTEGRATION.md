@@ -1,7 +1,7 @@
-# PHASE 5: Integration & End-to-End Testing
+# PHASE 5: Integration & End-to-End Testing + LLM
 
 ## 🎯 OBJECTIVE
-Wire all backend engines (similarity, parsers, cost) to the UI wizard, implement API routes, and conduct end-to-end testing with realistic data.
+Wire all backend engines (similarity, parsers, cost, **LLM**) to the UI wizard, implement API routes, and conduct end-to-end testing.
 
 ---
 
@@ -11,11 +11,36 @@ Project: RFQ AI System for EMS Manufacturing
 Location: `D:\Projects\RFQ_AI_SYSTEM`
 
 **Dependencies from previous phases:**
-- Phase 0: Fixed UI pages (Machines, Models, RFQ History)
-- Phase 1: Database schema with pgvector
-- Phase 2: Similarity engine
-- Phase 3: File parsers
-- Phase 4: Cost calculation engine
+- Phase 1: Database schema with pgvector ✅
+- Phase 2: Similarity engine ✅
+- Phase 3: File parsers + LLM ✅
+- Phase 4: Cost calculation engine ✅
+- LLM Integration: Gemini + OpenRouter ✅
+
+---
+
+## ⚠️ PRE-REQUISITE: Create Missing Table
+
+**Run this in Supabase SQL Editor first:**
+
+```sql
+-- rfq_stations table (missing from Phase 1)
+CREATE TABLE IF NOT EXISTS rfq_stations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  rfq_id uuid REFERENCES rfq_requests(id) ON DELETE CASCADE,
+  board_type text NOT NULL,
+  station_code text NOT NULL,
+  sequence integer NOT NULL,
+  manpower integer DEFAULT 1,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_rfq_stations_rfq ON rfq_stations(rfq_id);
+
+ALTER TABLE rfq_stations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all authenticated" ON rfq_stations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Allow read anon" ON rfq_stations FOR SELECT TO anon USING (true);
+```
 
 ---
 
@@ -34,8 +59,10 @@ app/
 │   │   └── route.ts              # POST - find similar models
 │   ├── parse/
 │   │   └── route.ts              # POST - parse uploaded files
-│   └── cost/
-│       └── route.ts              # POST - calculate costs
+│   ├── cost/
+│   │   └── route.ts              # POST - calculate costs
+│   └── explain/
+│       └── route.ts              # POST - LLM explanation (NEW)
 ```
 
 ---
@@ -80,9 +107,10 @@ export async function POST(request: NextRequest) {
         reference_model_id: body.reference_model_id || null,
         target_uph: body.target_uph,
         target_volume: body.target_volume,
-        notes: body.notes,
-        input_method: body.input_method,
         status: 'draft',
+        input_method: body.input_method,
+        pcb_features: body.pcb_features,
+        bom_summary: body.bom_summary,
       })
       .select()
       .single();
@@ -93,9 +121,10 @@ export async function POST(request: NextRequest) {
     if (body.stations && body.stations.length > 0) {
       const stationsData = body.stations.map((s: any, idx: number) => ({
         rfq_id: rfq.id,
-        board_type: s.board_type,
+        board_type: s.board_type || 'Main Board',
         station_code: s.station_code,
         sequence: s.sequence || idx + 1,
+        manpower: s.manpower || 1,
       }));
 
       const { error: stationsError } = await supabase
@@ -112,13 +141,14 @@ export async function POST(request: NextRequest) {
 }
 ```
 
-#### `app/api/rfq/[id]/process/route.ts`
+#### `app/api/rfq/[id]/process/route.ts` (WITH LLM)
 
 ```typescript
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase/client';
-import { findSimilarModels, inferMissingStations } from '@/lib/similarity';
+import { analyzeRFQ } from '@/lib/similarity';
 import { calculateCostBreakdown, assessRisks } from '@/lib/cost';
+import { explainRFQResult, generateSuggestions } from '@/lib/llm';
 
 export async function POST(
   request: NextRequest,
@@ -138,6 +168,7 @@ export async function POST(
       .from('rfq_requests')
       .select(`
         *,
+        customer:customers(id, code, name),
         stations:rfq_stations(*)
       `)
       .eq('id', rfqId)
@@ -145,67 +176,38 @@ export async function POST(
 
     if (rfqError) throw rfqError;
 
-    // Build PCB features from RFQ data (or use defaults)
-    const pcbFeatures = rfq.pcb_features || {
-      length_mm: 100,
-      width_mm: 50,
-      layer_count: 4,
-      cavity_count: 1,
-      side_count: 2,
-      smt_component_count: 200,
-      bga_count: 2,
-      fine_pitch_count: 5,
-      has_rf: true,
-      has_power_stage: false,
-      has_sensors: true,
-      has_display_connector: true,
-      has_battery_connector: true,
-    };
-
-    const bomSummary = rfq.bom_summary || {
-      total_line_items: 150,
-      ic_count: 20,
-      passive_count: 100,
-      connector_count: 10,
-      mcu_part_numbers: [],
-      rf_module_parts: [],
-      sensor_parts: [],
-      power_ic_parts: [],
-    };
-
+    // Build features from RFQ data
+    const pcbFeatures = rfq.pcb_features || getDefaultPCBFeatures();
+    const bomSummary = rfq.bom_summary || getDefaultBOMSummary();
     const rfqStations = (rfq.stations || []).map((s: any) => ({
       board_type: s.board_type,
       station_code: s.station_code,
       sequence: s.sequence,
     }));
 
-    // Find similar models
-    const similarModels = await findSimilarModels(
+    // 1. Run Similarity Analysis
+    const analysis = await analyzeRFQ(
       pcbFeatures,
       bomSummary,
       rfqStations,
-      5
+      rfq.customer?.id
     );
 
-    // Infer missing stations
-    const existingCodes = rfqStations.map((s: any) => s.station_code);
-    const inference = inferMissingStations(pcbFeatures, existingCodes);
+    const topMatch = analysis.top_match;
 
-    // Calculate costs for top match
-    const topMatch = similarModels[0];
+    // 2. Calculate Costs
     let costBreakdown = null;
     let riskAssessment = null;
 
-    if (topMatch) {
-      // Build station input from matched + inferred
+    if (topMatch || rfqStations.length > 0) {
       const allStations = [
         ...rfqStations.map((s: any) => ({
           station_code: s.station_code,
           quantity: 1,
           manpower: 1,
         })),
-        ...inference.recommended_stations.map(s => ({
-          station_code: s.station_code,
+        ...analysis.inference.recommended_stations.map(s => ({
+          station_code: s.code,
           quantity: 1,
           manpower: 1,
         })),
@@ -219,24 +221,74 @@ export async function POST(
 
       riskAssessment = assessRisks(
         allStations,
-        { lineUtilization: costBreakdown.line_utilization_percent, bottleneckStation: costBreakdown.bottleneck_station },
+        { 
+          lineUtilization: costBreakdown.line_utilization_percent, 
+          bottleneckStation: costBreakdown.bottleneck_station 
+        },
         pcbFeatures.has_rf,
         pcbFeatures.bga_count > 0,
         pcbFeatures.fine_pitch_count > 0
       );
     }
 
-    // Save results
-    for (const match of similarModels) {
+    // 3. Generate LLM Explanation (Bahasa Indonesia)
+    let explanation = null;
+    try {
+      explanation = await explainRFQResult({
+        modelName: rfq.model_name,
+        customerName: rfq.customer?.name || 'Unknown',
+        topMatch: topMatch?.model_code || 'Tidak ada',
+        score: topMatch?.overall_similarity || 0,
+        confidence: topMatch?.confidence || 'low',
+        matched: topMatch?.matched_stations.map(s => s.master_code) || [],
+        missing: topMatch?.missing_stations || [],
+        inferred: analysis.inference.recommended_stations.map(s => s.code),
+        riskScore: riskAssessment?.risk_score || 0,
+        riskFlags: riskAssessment?.risk_factors.map(f => f.description) || [],
+        investment: costBreakdown?.total_investment_usd || 0,
+      });
+    } catch (llmError) {
+      console.warn('LLM explanation failed:', llmError);
+    }
+
+    // 4. Generate Suggestions
+    let suggestions = null;
+    try {
+      if (costBreakdown) {
+        suggestions = await generateSuggestions({
+          productType: pcbFeatures.has_rf ? 'RF/Wireless' : 'General Electronics',
+          volume: rfq.target_volume || 10000,
+          targetUPH: rfq.target_uph || 200,
+          stations: rfqStations.map((s: any) => s.station_code),
+          issues: riskAssessment?.recommendations || [],
+          costs: {
+            labor: costBreakdown.monthly_labor_cost_usd,
+            test: costBreakdown.test_cost_per_unit * (rfq.target_volume || 10000),
+            fixture: costBreakdown.total_fixture_cost_usd,
+          },
+        });
+      }
+    } catch (llmError) {
+      console.warn('LLM suggestions failed:', llmError);
+    }
+
+    // 5. Save Results
+    for (const match of analysis.similar_models) {
       await supabase.from('rfq_results').insert({
         rfq_id: rfqId,
         matched_model_id: match.model_id,
         similarity_score: match.overall_similarity * 100,
         matched_stations: match.matched_stations,
         missing_stations: match.missing_stations,
+        inferred_stations: match === topMatch ? analysis.inference.recommended_stations : null,
         investment_breakdown: match === topMatch ? costBreakdown : null,
-        manpower_estimate: match === topMatch ? { total: costBreakdown?.total_manpower } : null,
+        cost_per_unit: match === topMatch ? { total: costBreakdown?.total_cost_per_unit } : null,
         risk_assessment: match === topMatch ? riskAssessment : null,
+        recommendation: match === topMatch ? {
+          explanation,
+          suggestions,
+          go_no_go: riskAssessment?.overall_level === 'high' ? 'Review Required' : 'Proceed',
+        } : null,
       });
     }
 
@@ -245,24 +297,84 @@ export async function POST(
       .from('rfq_requests')
       .update({ 
         status: 'completed',
-        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq('id', rfqId);
 
     return NextResponse.json({ 
       success: true,
-      results_count: similarModels.length,
+      results_count: analysis.similar_models.length,
       top_match: topMatch?.model_code,
       top_similarity: topMatch?.overall_similarity,
+      has_explanation: !!explanation,
+      has_suggestions: !!suggestions,
     });
 
   } catch (error: any) {
-    // Update status to failed
     await supabase
       .from('rfq_requests')
       .update({ status: 'failed' })
       .eq('id', rfqId);
 
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// Default values
+function getDefaultPCBFeatures() {
+  return {
+    length_mm: 100,
+    width_mm: 50,
+    layer_count: 4,
+    cavity_count: 1,
+    side_count: 2,
+    smt_component_count: 200,
+    bga_count: 0,
+    fine_pitch_count: 0,
+    has_rf: false,
+    has_power_stage: false,
+    has_sensors: false,
+    has_display_connector: false,
+    has_battery_connector: false,
+  };
+}
+
+function getDefaultBOMSummary() {
+  return {
+    total_line_items: 100,
+    ic_count: 15,
+    passive_count: 70,
+    connector_count: 8,
+    mcu_part_numbers: [],
+    rf_module_parts: [],
+    sensor_parts: [],
+  };
+}
+```
+
+#### `app/api/explain/route.ts` (LLM Endpoint)
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
+import { explainRFQResult, generateSuggestions } from '@/lib/llm';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { type, params } = body;
+
+    if (type === 'explain') {
+      const explanation = await explainRFQResult(params);
+      return NextResponse.json({ data: explanation });
+    }
+
+    if (type === 'suggest') {
+      const suggestions = await generateSuggestions(params);
+      return NextResponse.json({ data: suggestions });
+    }
+
+    return NextResponse.json({ error: 'Invalid type' }, { status: 400 });
+  } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
@@ -272,34 +384,30 @@ export async function POST(
 
 ```typescript
 import { NextRequest, NextResponse } from 'next/server';
-import { parseUploadedFile, inferPCBFeaturesFromBOM } from '@/lib/parsers';
+import { parseUploadedFile } from '@/lib/parsers';
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
+    const forceLLM = formData.get('forceLLM') === 'true';
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
-    const result = await parseUploadedFile(file);
+    const result = await parseUploadedFile(file, { forceLLM });
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: 400 });
-    }
-
-    // If BOM, also infer PCB features
-    let inferredFeatures = null;
-    if (result.bom) {
-      inferredFeatures = inferPCBFeaturesFromBOM(result.bom.summary);
     }
 
     return NextResponse.json({
       success: true,
       bom: result.bom,
       pcb: result.pcb,
-      inferred_features: inferredFeatures,
+      inferred_features: result.inferred_features,
+      parse_method: result.bom?.parse_method || result.pcb?.parse_method,
     });
 
   } catch (error: any) {
@@ -308,192 +416,9 @@ export async function POST(request: NextRequest) {
 }
 ```
 
-#### `app/api/similarity/route.ts`
-
-```typescript
-import { NextRequest, NextResponse } from 'next/server';
-import { findSimilarModels, normalizeStationCode } from '@/lib/similarity';
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-
-    // Normalize station codes if provided
-    if (body.stations) {
-      body.stations = body.stations.map((s: any) => ({
-        ...s,
-        ...normalizeStationCode(s.station_code),
-      }));
-    }
-
-    const results = await findSimilarModels(
-      body.pcb_features,
-      body.bom_summary,
-      body.stations || [],
-      body.top_n || 5
-    );
-
-    return NextResponse.json({ data: results });
-
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-}
-```
-
 ---
 
-### Part 2: Wire Wizard to API
-
-#### Update `app/(dashboard)/rfq/new/page.tsx`
-
-```typescript
-'use client';
-
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { toast } from 'sonner';
-import { PageTransition } from '@/components/layout/PageTransition';
-import { WizardContainer } from '@/components/rfq/wizard/WizardContainer';
-// ... other imports
-
-export default function NewRFQPage() {
-  const router = useRouter();
-  const [wizardData, setWizardData] = useState<any>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleComplete = async (data: any) => {
-    setIsSubmitting(true);
-
-    try {
-      // 1. Create RFQ
-      const createRes = await fetch('/api/rfq', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_id: data.customer_id,
-          model_name: data.modelName,
-          reference_model_id: data.referenceModelId,
-          target_uph: parseInt(data.targetUPH) || 200,
-          target_volume: parseInt(data.targetVolume) || 10000,
-          notes: data.notes,
-          input_method: data.inputMethod || 'manual',
-          stations: data.stations,
-          pcb_features: data.pcbFeatures,
-          bom_summary: data.bomSummary,
-        }),
-      });
-
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(createData.error);
-
-      const rfqId = createData.data.id;
-
-      // 2. Trigger processing
-      toast.info('Processing RFQ with AI...');
-      
-      const processRes = await fetch(`/api/rfq/${rfqId}/process`, {
-        method: 'POST',
-      });
-
-      const processData = await processRes.json();
-      if (!processRes.ok) throw new Error(processData.error);
-
-      toast.success('RFQ processed successfully!', {
-        description: `Found ${processData.results_count} similar models`,
-      });
-
-      // 3. Navigate to results
-      router.push(`/rfq/${rfqId}/results`);
-
-    } catch (error: any) {
-      toast.error('Failed to submit RFQ', {
-        description: error.message,
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // ... rest of component
-}
-```
-
-#### Update `FileUploadStep.tsx` to use parse API
-
-```typescript
-const handleFileSelect = async (files: FileList) => {
-  setIsProcessing(true);
-
-  for (const file of Array.from(files)) {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch('/api/parse', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const result = await res.json();
-
-      if (result.success) {
-        if (result.bom) {
-          setUploadedFiles(prev => [...prev, {
-            name: file.name,
-            type: 'bom',
-            data: result.bom,
-          }]);
-          
-          // Update wizard data with parsed BOM
-          onChange({
-            bomSummary: result.bom.summary,
-            pcbFeatures: {
-              ...data.pcbFeatures,
-              ...result.inferred_features,
-            },
-          });
-
-          toast.success(`Parsed ${result.bom.total_rows} BOM lines`);
-        }
-
-        if (result.pcb) {
-          setUploadedFiles(prev => [...prev, {
-            name: file.name,
-            type: 'pcb',
-            data: result.pcb,
-          }]);
-
-          // Update wizard data with PCB info
-          if (result.pcb.dimensions) {
-            onChange({
-              pcbFeatures: {
-                ...data.pcbFeatures,
-                length_mm: result.pcb.dimensions.length_mm,
-                width_mm: result.pcb.dimensions.width_mm,
-                layer_count: result.pcb.layer_count,
-                cavity_count: result.pcb.cavity_count,
-              },
-            });
-          }
-
-          toast.success('Extracted PCB dimensions');
-        }
-      } else {
-        toast.error(result.error);
-      }
-    } catch (error: any) {
-      toast.error(`Failed to parse ${file.name}`);
-    }
-  }
-
-  setIsProcessing(false);
-};
-```
-
----
-
-### Part 3: Update Results Page
+### Part 2: Update Results Page with LLM Content
 
 #### `app/(dashboard)/rfq/[id]/results/page.tsx`
 
@@ -503,21 +428,42 @@ const handleFileSelect = async (files: FileList) => {
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase/client';
-// ... imports
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+// ... other imports
 
 interface RFQResult {
   id: string;
   matched_model_id: string;
   similarity_score: number;
-  matched_stations: string[];
+  matched_stations: any[];
   missing_stations: string[];
+  inferred_stations: any[];
   investment_breakdown: any;
-  manpower_estimate: any;
+  cost_per_unit: any;
   risk_assessment: any;
+  recommendation: {
+    explanation?: {
+      summary: string;
+      similarity_explanation: string;
+      station_analysis: string;
+      risk_summary: string;
+      recommendations: string[];
+    };
+    suggestions?: Array<{
+      category: string;
+      title: string;
+      description: string;
+      impact: string;
+      action: string;
+    }>;
+    go_no_go: string;
+  };
   matched_model?: {
     code: string;
     name: string;
-    customer: { code: string };
+    customer: { code: string; name: string };
   };
 }
 
@@ -533,28 +479,19 @@ export default function ResultsPage() {
 
   const loadResults = async () => {
     try {
-      // Load RFQ
       const { data: rfqData } = await supabase
         .from('rfq_requests')
-        .select(`
-          *,
-          customer:customers(code, name)
-        `)
+        .select(`*, customer:customers(code, name)`)
         .eq('id', params.id)
         .single();
 
       setRfq(rfqData);
 
-      // Load results
       const { data: resultsData } = await supabase
         .from('rfq_results')
         .select(`
           *,
-          matched_model:models(
-            code,
-            name,
-            customer:customers(code)
-          )
+          matched_model:models(code, name, customer:customers(code, name))
         `)
         .eq('rfq_id', params.id)
         .order('similarity_score', { ascending: false });
@@ -567,210 +504,265 @@ export default function ResultsPage() {
     }
   };
 
-  // Convert DB results to component props
-  const recommendations = results.map((r, idx) => ({
-    id: r.id,
-    model_id: r.matched_model_id,
-    model_code: r.matched_model?.code || 'Unknown',
-    model_name: r.matched_model?.name || 'Unknown',
-    customer: r.matched_model?.customer?.code || 'Unknown',
-    similarity_score: r.similarity_score,
-    matched_stations: r.matched_stations || [],
-    missing_stations: r.missing_stations || [],
-    total_investment_usd: r.investment_breakdown?.total_investment_usd || 0,
-    total_manpower: r.manpower_estimate?.total || 0,
-    estimated_uph: r.investment_breakdown?.effective_uph || 0,
-    bottleneck_station: r.investment_breakdown?.bottleneck_station || '-',
-    status: 'Active',
-  }));
+  if (isLoading) return <LoadingSkeleton />;
 
-  // ... render with real data
+  const topResult = results[0];
+  const explanation = topResult?.recommendation?.explanation;
+  const suggestions = topResult?.recommendation?.suggestions;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold">{rfq?.model_name}</h1>
+          <p className="text-muted-foreground">{rfq?.customer?.name}</p>
+        </div>
+        <Badge variant={topResult?.recommendation?.go_no_go === 'Proceed' ? 'default' : 'destructive'}>
+          {topResult?.recommendation?.go_no_go || 'Pending'}
+        </Badge>
+      </div>
+
+      {/* AI Summary (LLM Generated) */}
+      {explanation && (
+        <Card>
+          <CardHeader>
+            <CardTitle>📋 Ringkasan AI</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-lg">{explanation.summary}</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <h4 className="font-medium mb-2">Analisis Similarity</h4>
+                <p className="text-sm text-muted-foreground">{explanation.similarity_explanation}</p>
+              </div>
+              <div>
+                <h4 className="font-medium mb-2">Analisis Station</h4>
+                <p className="text-sm text-muted-foreground">{explanation.station_analysis}</p>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-medium mb-2">Risiko</h4>
+              <p className="text-sm text-muted-foreground">{explanation.risk_summary}</p>
+            </div>
+
+            {explanation.recommendations.length > 0 && (
+              <div>
+                <h4 className="font-medium mb-2">Rekomendasi</h4>
+                <ul className="list-disc list-inside text-sm text-muted-foreground">
+                  {explanation.recommendations.map((rec, i) => (
+                    <li key={i}>{rec}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Similarity Results */}
+      <Card>
+        <CardHeader>
+          <CardTitle>🔍 Model Serupa</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {results.map((result, idx) => (
+              <div key={result.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                <div>
+                  <span className="font-medium">{result.matched_model?.code}</span>
+                  <span className="text-muted-foreground ml-2">
+                    ({result.matched_model?.customer?.code})
+                  </span>
+                </div>
+                <Badge variant={result.similarity_score >= 85 ? 'default' : 'secondary'}>
+                  {Math.round(result.similarity_score)}% Match
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cost Summary */}
+      {topResult?.investment_breakdown && (
+        <Card>
+          <CardHeader>
+            <CardTitle>💰 Estimasi Biaya</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">Total Investment</p>
+                <p className="text-xl font-bold">
+                  ${topResult.investment_breakdown.total_investment_usd?.toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Cost/Unit</p>
+                <p className="text-xl font-bold">
+                  ${topResult.cost_per_unit?.total?.toFixed(2)}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Effective UPH</p>
+                <p className="text-xl font-bold">{topResult.investment_breakdown.effective_uph}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Total Manpower</p>
+                <p className="text-xl font-bold">{topResult.investment_breakdown.total_manpower}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* AI Suggestions */}
+      {suggestions && suggestions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>💡 Saran AI</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {suggestions.map((sug, idx) => (
+                <div key={idx} className="p-4 border rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="outline">{sug.category}</Badge>
+                    <Badge variant={sug.impact === 'high' ? 'destructive' : 'secondary'}>
+                      {sug.impact} impact
+                    </Badge>
+                  </div>
+                  <h4 className="font-medium">{sug.title}</h4>
+                  <p className="text-sm text-muted-foreground mt-1">{sug.description}</p>
+                  <p className="text-sm font-medium mt-2">Action: {sug.action}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Risk Assessment */}
+      {topResult?.risk_assessment && (
+        <Card>
+          <CardHeader>
+            <CardTitle>⚠️ Risk Assessment</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4 mb-4">
+              <div className="text-3xl font-bold">
+                {topResult.risk_assessment.risk_score}/5
+              </div>
+              <Badge variant={
+                topResult.risk_assessment.overall_level === 'high' ? 'destructive' :
+                topResult.risk_assessment.overall_level === 'medium' ? 'secondary' : 'default'
+              }>
+                {topResult.risk_assessment.overall_level.toUpperCase()}
+              </Badge>
+            </div>
+            <div className="space-y-2">
+              {topResult.risk_assessment.risk_factors?.map((factor: any, idx: number) => (
+                <div key={idx} className="flex justify-between items-center text-sm">
+                  <span>{factor.description}</span>
+                  <Badge variant="outline">{factor.score}/5</Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-12 w-1/3" />
+      <Skeleton className="h-48 w-full" />
+      <Skeleton className="h-32 w-full" />
+      <Skeleton className="h-32 w-full" />
+    </div>
+  );
 }
 ```
 
 ---
 
-### Part 4: Testing Checklist
-
-#### Unit Tests (`__tests__/`)
-
-```
-__tests__/
-├── similarity/
-│   ├── pcb-similarity.test.ts
-│   ├── bom-similarity.test.ts
-│   └── inference.test.ts
-├── parsers/
-│   ├── excel-parser.test.ts
-│   └── bom-analyzer.test.ts
-├── cost/
-│   ├── fixture-cost.test.ts
-│   ├── capacity-calc.test.ts
-│   └── cost-breakdown.test.ts
-└── api/
-    └── rfq.test.ts
-```
+### Part 3: Testing Checklist
 
 #### E2E Test Scenarios
 
 ```markdown
-## Test Case 1: New RFQ - Manual Entry
+## Test Case 1: New RFQ with AI Processing
 1. Go to /rfq/new
 2. Select customer: XIAOMI
-3. Enter model name: TEST-MODEL-001
-4. Select reference model: POCO-X6-PRO-MAIN
-5. Set target UPH: 200
-6. Set target volume: 10000
-7. Add stations manually: MBT, CAL, RFT1, MMI
-8. Submit
-9. Verify: Redirects to results page with similarity matches
+3. Enter model name: TEST-AI-001
+4. Upload BOM Excel (verify LLM parsing if messy)
+5. Add stations: MBT, CAL, RFT, MMI
+6. Submit
+7. Verify: Results page shows:
+   - Similarity matches ✅
+   - AI Explanation (Bahasa Indonesia) ✅
+   - Cost breakdown ✅
+   - AI Suggestions ✅
+   - Risk assessment ✅
 
-## Test Case 2: New RFQ - File Upload
-1. Go to /rfq/new
-2. Select customer: TCL
-3. Upload BOM Excel file
-4. Verify: BOM summary extracted (IC count, RF detected, etc.)
-5. Upload PCB PDF
-6. Verify: Dimensions extracted
-7. Submit
-8. Verify: Results include inferred stations
+## Test Case 2: LLM Fallback
+1. Create RFQ with poorly formatted BOM
+2. Verify: System uses LLM parsing
+3. Check: parse_method === 'hybrid' or 'llm'
 
-## Test Case 3: Results Accuracy
-1. Create RFQ similar to existing POCO-X6-PRO-MAIN
-2. Verify: Similarity score > 85%
-3. Verify: Matched stations correct
-4. Verify: Missing stations identified
-5. Verify: Investment breakdown reasonable ($100K-$500K)
-6. Verify: Manpower estimate reasonable (8-15 operators)
-
-## Test Case 4: Edge Cases
-1. Empty stations list → Should infer all from features
-2. Unknown station codes → Should map to standard
-3. Very different PCB → Similarity < 70%, low confidence
-4. No reference model → Still calculates costs
+## Test Case 3: Explanation Quality
+1. Create RFQ for RF product without RFT station
+2. Verify: AI explanation mentions missing RF test
+3. Verify: Suggestions include "Add RFT station"
+4. Verify: Risk score elevated
 ```
 
 ---
 
-### Part 5: Performance Optimization
-
-```typescript
-// lib/supabase/client.ts - Add query caching
-
-import { createClient } from '@supabase/supabase-js';
-
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  {
-    db: {
-      schema: 'public',
-    },
-    global: {
-      headers: {
-        'x-application-name': 'rfq-ai-system',
-      },
-    },
-  }
-);
-
-// Add React Query for client-side caching
-// Already in package.json: @tanstack/react-query
-```
-
-```typescript
-// lib/api/hooks.ts - React Query hooks
-
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getRFQs, createRFQ } from './rfq';
-
-export function useRFQs() {
-  return useQuery({
-    queryKey: ['rfqs'],
-    queryFn: getRFQs,
-    staleTime: 30000, // 30 seconds
-  });
-}
-
-export function useCreateRFQ() {
-  const queryClient = useQueryClient();
-  
-  return useMutation({
-    mutationFn: createRFQ,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rfqs'] });
-    },
-  });
-}
-```
-
----
-
-## ✅ FINAL ACCEPTANCE CRITERIA
+## ✅ FINAL CHECKLIST
 
 ### Functional
 - [ ] New RFQ wizard works end-to-end
-- [ ] File upload parses BOM/PDF correctly
+- [ ] File upload parses BOM/PDF (with LLM fallback)
 - [ ] Similarity engine returns accurate matches
 - [ ] Cost breakdown calculates correctly
-- [ ] Results page shows real data from DB
-- [ ] RFQ History shows all requests with status
+- [ ] **LLM explanation generated (Bahasa Indonesia)**
+- [ ] **AI suggestions relevant to context**
+- [ ] Results page shows all data
+- [ ] RFQ History lists all requests
 
 ### Non-Functional
 - [ ] Page load < 2 seconds
-- [ ] Similarity search < 500ms for 100 models
+- [ ] AI processing < 30 seconds
 - [ ] No TypeScript errors
 - [ ] `npm run build` passes
-- [ ] No console errors in browser
 
-### Data Integrity
-- [ ] RFQ data persists in Supabase
-- [ ] Results linked correctly to RFQ
-- [ ] Station mappings preserved
-- [ ] Cost calculations reproducible
+### Database
+- [ ] `rfq_stations` table exists
+- [ ] `rfq_results` has `recommendation` column
+- [ ] All RLS policies working
 
 ---
 
-## 🚀 DEPLOYMENT CHECKLIST
+## 🚀 DEPLOYMENT
 
 ```bash
-# 1. Environment variables
-cp .env.example .env.production
-# Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
+# 1. Environment check
+cat .env.local
+# Should have: SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY
 
-# 2. Database migrations
-npx supabase db push
+# 2. Run missing migration (rfq_stations)
+# Execute SQL in Supabase Dashboard
 
 # 3. Build check
 npm run build
 
-# 4. Type check
-npm run typecheck
-
-# 5. Deploy
-# Vercel: git push (auto-deploy)
-# Self-hosted: npm start
+# 4. Deploy
+git push
 ```
-
----
-
-## 📊 SUCCESS METRICS
-
-After deployment, track:
-1. **RFQ Processing Time**: Target < 30 seconds
-2. **Similarity Accuracy**: Top match should be correct >80% of time
-3. **Cost Estimation Variance**: Within ±20% of actual quotes
-4. **User Adoption**: Engineers using system for new RFQs
-
----
-
-## 🎉 PROJECT COMPLETE
-
-With Phase 5 done, the RFQ AI System should be fully functional:
-- ✅ UI pages working (Dashboard, Machines, Models, RFQ)
-- ✅ Database schema with pgvector
-- ✅ Similarity engine matching historical models
-- ✅ File parsers extracting BOM/PCB data
-- ✅ Cost engine calculating investment & manpower
-- ✅ API routes connecting frontend to backend
-- ✅ End-to-end flow from RFQ creation to results
