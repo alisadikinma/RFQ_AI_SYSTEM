@@ -32,6 +32,7 @@
 - [The Problem](#the-problem)
 - [The Solution](#the-solution)
 - [Key Features](#features)
+- [Typical RFQ Input Data](#typical-rfq-input-data)
 - [System Architecture](#architecture)
 - [AI/ML Components](#aiml-components)
 - [Database Design](#database-design)
@@ -49,7 +50,9 @@
 
 **RFQ AI System** is an intelligent automation platform designed specifically for the **Electronics Manufacturing Services (EMS)** industry. It transforms the traditionally manual, expertise-dependent RFQ (Request for Quote) process into an AI-driven workflow that delivers accurate cost estimations in minutes instead of hours.
 
-The system leverages **multimodal similarity matching** (PCB geometry + BOM semantics), **historical production data analysis**, and **Large Language Models** to predict required test stations, estimate manpower requirements, and generate comprehensive cost breakdowns.
+The system leverages **multimodal similarity matching** (PCB geometry + station patterns), **historical production data analysis**, and **Large Language Models** to predict required test stations, estimate manpower requirements, and generate comprehensive cost breakdowns.
+
+> **Note**: BOM (Bill of Materials) analysis is available as an **optional enhancement** when customers provide detailed component lists. The core system works effectively with PCB specifications and station patterns alone.
 
 ### 🏆 Key Metrics
 
@@ -71,19 +74,17 @@ In traditional EMS operations, processing an RFQ involves:
 │                    Traditional RFQ Process (4-8 hours)                  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  1. 📄 Receive customer RFQ (incomplete data, varied formats)           │
+│  1. 📄 Receive customer RFQ (PCB specs, station list, qty, target UPH)  │
 │                           ↓                                             │
 │  2. 🔍 Senior engineer manually searches for similar past projects      │
 │                           ↓                                             │
-│  3. 📊 Analyze BOM - identify components, complexity, special needs     │
+│  3. 🧪 Determine test stations based on experience & tribal knowledge   │
 │                           ↓                                             │
-│  4. 🧪 Determine test stations based on experience & tribal knowledge   │
+│  4. 👷 Estimate manpower from similar projects (often from memory)      │
 │                           ↓                                             │
-│  5. 👷 Estimate manpower from similar projects (often from memory)      │
+│  5. 💰 Calculate costs using spreadsheets & historical references       │
 │                           ↓                                             │
-│  6. 💰 Calculate costs using spreadsheets & historical references       │
-│                           ↓                                             │
-│  7. ✅ Generate quotation (high variance, expertise-dependent)          │
+│  6. ✅ Generate quotation (high variance, expertise-dependent)          │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -108,13 +109,14 @@ RFQ AI System automates the entire workflow using AI/ML:
 │                    AI-Powered RFQ Process (15-30 min)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  1. 📤 Upload RFQ files (Excel BOM, PDF drawings, specs)                │
+│  1. 📤 Input RFQ data (PCB specs, stations, qty, UPH) or upload files   │
 │                           ↓                                             │
-│  2. 🤖 AI parses & extracts structured data (LLM-powered)               │
+│  2. 🤖 AI parses & normalizes data (maps customer terms → standard)     │
 │                           ↓                                             │
-│  3. 🔮 Multimodal Similarity Engine finds matching historical models    │
-│      ├── PCB Geometry Vector (dimensions, layers, cavity)               │
-│      └── BOM Semantic Vector (components, features)                     │
+│  3. 🔮 Similarity Engine finds matching historical models               │
+│      ├── PCB Geometry (dimensions, layers, cavity, complexity)          │
+│      ├── Station Pattern (test sequence, coverage)                      │
+│      └── BOM Features (optional, if customer provides)                  │
 │                           ↓                                             │
 │  4. 🧪 Auto-predict test stations from similar models + inference rules │
 │                           ↓                                             │
@@ -133,9 +135,10 @@ RFQ AI System automates the entire workflow using AI/ML:
 
 ### 🔍 Intelligent Similarity Matching
 
-- **Multimodal approach**: Combines PCB geometry analysis with BOM semantic understanding
+- **Primary matching**: PCB geometry (size, layers, cavity) + station patterns
+- **Optional enhancement**: BOM semantic analysis when component data available
 - **Vector similarity search**: Uses pgvector for sub-50ms similarity queries
-- **Weighted scoring**: Configurable weights for PCB (60%) and BOM (40%) features
+- **Adaptive weighting**: PCB (70%) + Stations (30%), or PCB (50%) + Stations (25%) + BOM (25%) when available
 - **Top-N recommendations**: Returns ranked similar models with confidence scores
 
 ### 🧪 Smart Station Prediction
@@ -147,7 +150,7 @@ RFQ AI System automates the entire workflow using AI/ML:
 
 ### 📊 Automated File Parsing
 
-- **Excel BOM parsing**: Extracts components, quantities, package types
+- **Excel parsing**: Extracts station lists, quantities, specifications
 - **PDF extraction**: Reads PCB dimensions, layer count, specifications
 - **LLM fallback**: Uses Gemini 2.0 Flash when algorithmic parsing fails
 - **Confidence scoring**: Reports extraction confidence for review
@@ -165,6 +168,42 @@ RFQ AI System automates the entire workflow using AI/ML:
 - **Natural language output**: Explains results in Bahasa Indonesia
 - **Actionable suggestions**: AI-generated recommendations for cost optimization
 - **Risk assessment**: Identifies potential issues and mitigation strategies
+
+---
+
+## 📥 Typical RFQ Input Data
+
+Customers typically provide the following data when requesting a quote:
+
+### Required Data (Always Provided)
+
+| Data | Description | Example |
+|------|-------------|--------|
+| **PCB Dimensions** | Board size from drawing/spec | 120mm × 80mm |
+| **Layer Count** | PCB layer configuration | 4-layer, 6-layer |
+| **Cavity Count** | Panels per board | 4-cavity, 8-cavity |
+| **Station List** | Required test/assembly stations | RFT, MMI, VISUAL, OS_DOWNLOAD |
+| **Target Quantity** | Production lot size | 50,000 pcs/month |
+| **Target UPH** | Units per hour requirement | 150 UPH |
+
+### Optional Data (Sometimes Provided)
+
+| Data | Description | When Provided |
+|------|-------------|---------------|
+| **Component Count** | Total parts on board | Sometimes in specs |
+| **Special Requirements** | RF, automotive, etc. | Complex products |
+| **Reference Product** | Similar existing model | Repeat customers |
+| **Sample Unit** | Physical sample | NPI projects |
+
+### Rarely Provided
+
+| Data | Description | Why Rare |
+|------|-------------|----------|
+| **BOM List** | Detailed component list | Confidential IP |
+| **Schematic** | Circuit design | Confidential IP |
+| **Gerber Files** | PCB layout | Confidential IP |
+
+> **System Design**: The AI system is designed to work effectively with **Required Data** only. BOM analysis is available as an optional enhancement when customers choose to share component details.
 
 ---
 
@@ -192,10 +231,10 @@ RFQ AI System automates the entire workflow using AI/ML:
 │  │  │  Similarity  │  │    File      │  │    Cost      │               │    │
 │  │  │   Engine     │  │   Parsers    │  │   Engine     │               │    │
 │  │  ├──────────────┤  ├──────────────┤  ├──────────────┤               │    │
-│  │  │ • PCB Vector │  │ • Excel BOM  │  │ • Material   │               │    │
-│  │  │ • BOM Vector │  │ • PDF Extract│  │ • Process    │               │    │
-│  │  │ • Hybrid     │  │ • LLM Parse  │  │ • Labor      │               │    │
-│  │  │   Matching   │  │ • Validation │  │ • Test       │               │    │
+│  │  │ • PCB Vector │  │ • Excel Parse│  │ • Material   │               │    │
+│  │  │ • Station Vec│  │ • PDF Extract│  │ • Process    │               │    │
+│  │  │ • BOM (opt)  │  │ • LLM Parse  │  │ • Labor      │               │    │
+│  │  │ • Hybrid     │  │ • Validation │  │ • Test       │               │    │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘               │    │
 │  │                                                                      │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
@@ -211,14 +250,16 @@ RFQ AI System automates the entire workflow using AI/ML:
 └─────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐
-  │  Upload  │────►│  Parse &  │────►│  Generate  │────►│   Similarity │
-  │  Files   │     │  Extract  │     │  Vectors   │     │    Search    │
+  │  Input   │────►│  Parse &  │────►│  Generate  │────►│   Similarity │
+  │  Data    │     │  Normalize│     │  Vectors   │     │    Search    │
   └──────────┘     └───────────┘     └────────────┘     └──────────────┘
        │                │                  │                    │
-       │           ┌────┴────┐        ┌────┴────┐          ┌────┴────┐
-       │           │ BOM.xlsx│        │PCB Vec  │          │Top 5    │
-       │           │ PCB.pdf │        │BOM Vec  │          │Matches  │
-       │           └─────────┘        └─────────┘          └─────────┘
+       │           ┌────┴────────┐     ┌────┴────┐          ┌────┴────┐
+       │           │ PCB Specs │     │PCB Vec  │          │Top 5    │
+       │           │ Stations  │     │Station  │          │Matches  │
+       │           │ Qty, UPH  │     │Pattern  │          └─────────┘
+       │           │ BOM (opt) │     │BOM (opt)│                │
+       │           └───────────┘     └─────────┘                │
        │                                                        │
        ▼                                                        ▼
   ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐
@@ -241,14 +282,22 @@ RFQ AI System automates the entire workflow using AI/ML:
 The heart of the system - finds similar historical models using vector similarity:
 
 ```typescript
-// Similarity Score Calculation
-Score_total = (W_pcb × Sim_PCB) + (W_bom × Sim_BOM)
+// Similarity Score Calculation (Standard Mode - without BOM)
+Score_total = (W_pcb × Sim_PCB) + (W_station × Sim_Stations)
 
 Where:
-- W_pcb = 0.6 (PCB geometry weight)
-- W_bom = 0.4 (BOM semantics weight)
+- W_pcb = 0.70 (PCB geometry weight)
+- W_station = 0.30 (Station pattern weight)
 - Sim_PCB = cosine_similarity(query_pcb_vector, historical_pcb_vector)
-- Sim_BOM = cosine_similarity(query_bom_vector, historical_bom_vector)
+- Sim_Stations = jaccard_similarity(query_stations, historical_stations)
+
+// Enhanced Mode (when customer provides BOM)
+Score_total = (W_pcb × Sim_PCB) + (W_station × Sim_Stations) + (W_bom × Sim_BOM)
+
+Where:
+- W_pcb = 0.50 (PCB geometry weight)
+- W_station = 0.25 (Station pattern weight)  
+- W_bom = 0.25 (BOM semantics weight)
 ```
 
 #### PCB Feature Vector (Geometric)
@@ -268,7 +317,24 @@ interface PCBFeatures {
 }
 ```
 
-#### BOM Feature Vector (Semantic)
+#### Station Pattern Vector
+
+```typescript
+interface StationPattern {
+  station_codes: string[];      // List of stations (normalized)
+  station_count: number;        // Total station count
+  has_rf_test: boolean;         // RFT, CAL/RFT stations present
+  has_functional: boolean;      // FCT, MMI stations present
+  has_programming: boolean;     // OS_DOWNLOAD present
+  has_inspection: boolean;      // VISUAL, AOI present
+  has_assembly: boolean;        // UNDERFILL, T_GREASE, SHIELDING
+  complexity_score: number;     // 1-10 based on station count & types
+}
+```
+
+#### BOM Feature Vector (Optional - When Customer Provides)
+
+> **Note**: BOM analysis is optional. Most customers do not share detailed component lists. When available, it enhances matching accuracy.
 
 ```typescript
 interface BOMFeatures {
@@ -360,8 +426,9 @@ Used for intelligent parsing and natural language generation:
 
 | Use Case | Input | Output |
 |----------|-------|--------|
-| BOM Parsing | Messy Excel data | Structured JSON with components |
+| Station List Parsing | Customer Excel/PDF | Normalized station codes |
 | PDF Extraction | Drawing/spec PDF | PCB dimensions, layer count |
+| BOM Parsing (Optional) | Component list | Structured JSON with features |
 | Result Explanation | Analysis results | Bahasa Indonesia summary |
 | Suggestions | Cost breakdown | Optimization recommendations |
 

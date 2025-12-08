@@ -235,7 +235,7 @@ export default function MachinesPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{machine.typical_uph}</TableCell>
-                      <TableCell className="text-right tabular-nums">{machine.cycle_time}</TableCell>
+                      <TableCell className="text-right tabular-nums">{machine.typical_cycle_time_sec}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
                           <Button

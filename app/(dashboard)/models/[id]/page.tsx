@@ -266,7 +266,7 @@ export default function ModelDetailPage() {
                             {station.machine.typical_uph}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {station.machine.cycle_time}
+                            {station.machine.typical_cycle_time_sec}
                           </TableCell>
                         </TableRow>
                       );

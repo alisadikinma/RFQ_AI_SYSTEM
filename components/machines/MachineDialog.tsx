@@ -32,8 +32,10 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
     description: '',
     category: 'Testing',
     typical_uph: 100,
-    cycle_time: 36,
+    typical_cycle_time_sec: 36,
     operator_ratio: 1.0,
+    triggers_if: [],
+    required_for: [],
   });
 
   useEffect(() => {
@@ -44,8 +46,10 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
         description: machine.description || '',
         category: machine.category,
         typical_uph: machine.typical_uph,
-        cycle_time: machine.cycle_time,
+        typical_cycle_time_sec: machine.typical_cycle_time_sec,
         operator_ratio: machine.operator_ratio,
+        triggers_if: machine.triggers_if || [],
+        required_for: machine.required_for || [],
       });
     } else {
       setFormData({
@@ -54,8 +58,10 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
         description: '',
         category: 'Testing',
         typical_uph: 100,
-        cycle_time: 36,
+        typical_cycle_time_sec: 36,
         operator_ratio: 1.0,
+        triggers_if: [],
+        required_for: [],
       });
     }
     setError(false);
@@ -64,7 +70,7 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
   useEffect(() => {
     if (formData.typical_uph > 0) {
       const cycleTime = Math.round(3600 / formData.typical_uph);
-      setFormData(prev => ({ ...prev, cycle_time: cycleTime }));
+      setFormData(prev => ({ ...prev, typical_cycle_time_sec: cycleTime }));
     }
   }, [formData.typical_uph]);
 
@@ -179,7 +185,7 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
             </Label>
             <Select
               value={formData.category}
-              onValueChange={(value) => setFormData({ ...formData, category: value })}
+              onValueChange={(value) => setFormData({ ...formData, category: value as 'Testing' | 'Assembly' | 'Inspection' | 'Programming' })}
               disabled={isLoading}
             >
               <SelectTrigger>
@@ -209,12 +215,12 @@ export function MachineDialog({ isOpen, onClose, machine, onSuccess }: MachineDi
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="cycle_time">Cycle Time (s)</Label>
+              <Label htmlFor="typical_cycle_time_sec">Cycle Time (s)</Label>
               <Input
-                id="cycle_time"
+                id="typical_cycle_time_sec"
                 type="number"
-                value={formData.cycle_time}
-                onChange={(e) => setFormData({ ...formData, cycle_time: parseInt(e.target.value) || 0 })}
+                value={formData.typical_cycle_time_sec}
+                onChange={(e) => setFormData({ ...formData, typical_cycle_time_sec: parseInt(e.target.value) || 0 })}
                 min="1"
                 disabled={isLoading}
                 className="bg-slate-50"
