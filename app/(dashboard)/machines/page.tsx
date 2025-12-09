@@ -1,19 +1,29 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Search, Edit, Trash2, Factory } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Factory, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { LoadingSkeleton, TableRowSkeleton } from '@/components/shared/LoadingSkeleton';
+import { TableRowSkeleton } from '@/components/shared/LoadingSkeleton';
 import { DeleteDialog } from '@/components/shared/DeleteDialog';
 import { MachineDialog } from '@/components/machines/MachineDialog';
-import { Machine, getMachines, deleteMachine, getMachineUsageCount } from '@/lib/api/stations';
-import { containerVariants, itemVariants } from '@/lib/animations';
+import { 
+  Machine, 
+  deleteMachine, 
+  getMachineUsageCount, 
+  getStationsPaginated, 
+  getStationCategories,
+  PaginatedResult 
+} from '@/lib/api/stations';
+import { containerVariants } from '@/lib/animations';
+
+const PAGE_SIZE = 15;
 
 const rowVariants = {
   initial: { opacity: 0, x: -20 },
@@ -30,22 +40,38 @@ const rowVariants = {
 };
 
 export default function MachinesPage() {
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [filteredMachines, setFilteredMachines] = useState<Machine[]>([]);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [result, setResult] = useState<PaginatedResult<Machine> | null>(null);
+  const [categories, setCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [searchInput, setSearchInput] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [machineToDelete, setMachineToDelete] = useState<Machine | null>(null);
   const [deleteWarning, setDeleteWarning] = useState('');
 
-  const loadMachines = async () => {
+  // Get params from URL
+  const page = parseInt(searchParams.get('page') || '1');
+  const search = searchParams.get('search') || '';
+  const category = searchParams.get('category') || 'All';
+
+  // Sync search input with URL param on mount
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  const loadMachines = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const data = await getMachines();
-      setMachines(data);
-      setFilteredMachines(data);
+      const data = await getStationsPaginated(page, PAGE_SIZE, {
+        search: search || undefined,
+        category: category !== 'All' ? category : undefined,
+      });
+      setResult(data);
     } catch (error: any) {
       toast.error('Failed to load machines', {
         description: error.message,
@@ -53,29 +79,63 @@ export default function MachinesPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page, search, category]);
 
-  useEffect(() => {
-    loadMachines();
+  const loadCategories = useCallback(async () => {
+    try {
+      const data = await getStationCategories();
+      setCategories(data);
+    } catch (error) {
+      console.error('Failed to load categories', error);
+    }
   }, []);
 
   useEffect(() => {
-    let filtered = machines;
+    loadCategories();
+  }, [loadCategories]);
 
-    if (searchQuery) {
-      filtered = filtered.filter(
-        (m) =>
-          m.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          m.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+  useEffect(() => {
+    loadMachines();
+  }, [loadMachines]);
+
+  // Update URL params
+  const updateParams = useCallback((updates: Record<string, string>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && value !== 'All' && value !== '') {
+        params.set(key, value);
+      } else {
+        params.delete(key);
+      }
+    });
+    // Reset to page 1 when filters change
+    if (!('page' in updates)) {
+      params.delete('page');
     }
+    router.push(`/machines?${params.toString()}`);
+  }, [router, searchParams]);
 
-    if (categoryFilter !== 'All') {
-      filtered = filtered.filter((m) => m.category === categoryFilter);
+  // Debounced search
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchInput(value);
+    
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
     }
+    
+    debounceRef.current = setTimeout(() => {
+      updateParams({ search: value });
+    }, 300);
+  };
 
-    setFilteredMachines(filtered);
-  }, [searchQuery, categoryFilter, machines]);
+  const handleCategoryChange = (value: string) => {
+    updateParams({ category: value });
+  };
+
+  const handlePageChange = (newPage: number) => {
+    updateParams({ page: String(newPage) });
+  };
 
   const handleAddMachine = () => {
     setSelectedMachine(null);
@@ -114,8 +174,6 @@ export default function MachinesPage() {
     }
   };
 
-  const categories = ['All', ...Array.from(new Set(machines.map((m) => m.category)))];
-
   return (
     <PageTransition>
       <div className="space-y-6">
@@ -149,36 +207,37 @@ export default function MachinesPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <Input
                   placeholder="Search machines..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  value={searchInput}
+                  onChange={handleSearchChange}
                   className="pl-10"
                 />
               </div>
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <Select value={category} onValueChange={handleCategoryChange}>
                 <SelectTrigger className="w-full md:w-48">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="All">All Categories</SelectItem>
                   {categories.map((cat) => (
                     <SelectItem key={cat} value={cat}>
-                      {cat === 'All' ? 'All Categories' : cat}
+                      {cat}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <div className="text-sm text-slate-500 flex items-center">
-                Showing {filteredMachines.length}
+              <div className="text-sm text-slate-500 flex items-center whitespace-nowrap">
+                {result ? `${result.total} total` : '...'}
               </div>
             </div>
           </div>
 
           {isLoading ? (
             <div className="p-4">
-              {[...Array(5)].map((_, i) => (
+              {[...Array(8)].map((_, i) => (
                 <TableRowSkeleton key={i} />
               ))}
             </div>
-          ) : filteredMachines.length === 0 ? (
+          ) : !result || result.data.length === 0 ? (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -191,11 +250,11 @@ export default function MachinesPage() {
                 No machines found
               </h3>
               <p className="text-slate-500 dark:text-slate-400 mt-1">
-                {searchQuery || categoryFilter !== 'All'
+                {search || category !== 'All'
                   ? 'Try adjusting your filters'
                   : 'Add your first machine to get started'}
               </p>
-              {!searchQuery && categoryFilter === 'All' && (
+              {!search && category === 'All' && (
                 <Button onClick={handleAddMachine} className="mt-4">
                   <Plus className="w-4 h-4 mr-2" />
                   Add Machine
@@ -203,63 +262,120 @@ export default function MachinesPage() {
               )}
             </motion.div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">UPH</TableHead>
-                    <TableHead className="text-right">Cycle Time (s)</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredMachines.map((machine, index) => (
-                    <motion.tr
-                      key={machine.id}
-                      variants={rowVariants}
-                      initial="initial"
-                      animate="animate"
-                      exit="exit"
-                      custom={index}
-                      whileHover={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}
-                      className="cursor-pointer"
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead className="text-right">UPH</TableHead>
+                      <TableHead className="text-right">Cycle Time (s)</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {result.data.map((machine, index) => (
+                      <motion.tr
+                        key={machine.id}
+                        variants={rowVariants}
+                        initial="initial"
+                        animate="animate"
+                        exit="exit"
+                        custom={index}
+                        whileHover={{ backgroundColor: 'rgba(59, 130, 246, 0.05)' }}
+                        className="cursor-pointer"
+                      >
+                        <TableCell className="font-mono font-medium">{machine.code}</TableCell>
+                        <TableCell>{machine.name}</TableCell>
+                        <TableCell>
+                          <span className="inline-flex px-2 py-1 rounded-full text-xs bg-slate-100 dark:bg-slate-700">
+                            {machine.category}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{machine.typical_uph}</TableCell>
+                        <TableCell className="text-right tabular-nums">{machine.typical_cycle_time_sec}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditMachine(machine)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteClick(machine)}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </motion.tr>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Pagination */}
+              {result.totalPages > 1 && (
+                <div className="flex items-center justify-between p-4 border-t border-slate-200 dark:border-slate-700">
+                  <div className="text-sm text-slate-500">
+                    Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, result.total)} of {result.total}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page - 1)}
+                      disabled={page <= 1}
                     >
-                      <TableCell className="font-mono font-medium">{machine.code}</TableCell>
-                      <TableCell>{machine.name}</TableCell>
-                      <TableCell>
-                        <span className="inline-flex px-2 py-1 rounded-full text-xs bg-slate-100 dark:bg-slate-700">
-                          {machine.category}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{machine.typical_uph}</TableCell>
-                      <TableCell className="text-right tabular-nums">{machine.typical_cycle_time_sec}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
+                      <ChevronLeft className="w-4 h-4" />
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {[...Array(Math.min(5, result.totalPages))].map((_, i) => {
+                        let pageNum: number;
+                        if (result.totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (page <= 3) {
+                          pageNum = i + 1;
+                        } else if (page >= result.totalPages - 2) {
+                          pageNum = result.totalPages - 4 + i;
+                        } else {
+                          pageNum = page - 2 + i;
+                        }
+                        
+                        return (
                           <Button
-                            variant="ghost"
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => handleEditMachine(machine)}
+                            onClick={() => handlePageChange(pageNum)}
+                            className="w-8"
                           >
-                            <Edit className="w-4 h-4" />
+                            {pageNum}
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteClick(machine)}
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </motion.tr>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                        );
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePageChange(page + 1)}
+                      disabled={page >= result.totalPages}
+                    >
+                      Next
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </motion.div>
       </div>

@@ -1,14 +1,14 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { TrendingUp, TrendingDown, LucideIcon } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, LucideIcon } from 'lucide-react';
 import { AnimatedNumber } from '@/components/shared/AnimatedNumber';
 
 interface StatsCardProps {
   title: string;
   value: number;
   icon: LucideIcon;
-  trend: 'up' | 'down';
+  trend: 'up' | 'down' | 'neutral';
   trendValue: string;
   suffix?: string;
   delay?: number;
@@ -33,6 +33,19 @@ export function StatsCard({
   suffix = '',
   delay = 0
 }: StatsCardProps) {
+  const getTrendColor = () => {
+    switch (trend) {
+      case 'up':
+        return 'text-green-600 dark:text-green-500';
+      case 'down':
+        return 'text-red-600 dark:text-red-500';
+      default:
+        return 'text-slate-500 dark:text-slate-400';
+    }
+  };
+
+  const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
+
   return (
     <motion.div
       variants={cardVariants}
@@ -51,18 +64,8 @@ export function StatsCard({
             <AnimatedNumber value={value} format={suffix !== '%'} />
             {suffix}
           </p>
-          <div
-            className={`flex items-center mt-2 text-sm font-medium ${
-              trend === 'up'
-                ? 'text-success'
-                : 'text-red-600'
-            }`}
-          >
-            {trend === 'up' ? (
-              <TrendingUp className="w-4 h-4 mr-1" />
-            ) : (
-              <TrendingDown className="w-4 h-4 mr-1" />
-            )}
+          <div className={`flex items-center mt-2 text-sm font-medium ${getTrendColor()}`}>
+            <TrendIcon className="w-4 h-4 mr-1" />
             <span>{trendValue}</span>
           </div>
         </div>

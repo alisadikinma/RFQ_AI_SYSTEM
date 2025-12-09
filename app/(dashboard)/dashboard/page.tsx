@@ -1,15 +1,17 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Package, Cpu, FileText, Target, Plus } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import { PageTransition } from '@/components/layout/PageTransition';
-import { StatsCard as NewStatsCard } from '@/components/dashboard/StatsCard';
+import { StatsCard } from '@/components/dashboard/StatsCard';
 import { RFQTrendChart } from '@/components/dashboard/RFQTrendChart';
 import { TopList } from '@/components/dashboard/TopList';
 import { RecentRFQTable } from '@/components/dashboard/RecentRFQTable';
 import { Button } from '@/components/ui/button';
-import { mockDashboardData } from '@/lib/data/mock-dashboard';
+import { getDashboardData, DashboardData } from '@/lib/api/dashboard';
 
 const containerVariants = {
   animate: {
@@ -18,12 +20,90 @@ const containerVariants = {
 };
 
 export default function DashboardPage() {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const result = await getDashboardData();
+        setData(result);
+      } catch (error: any) {
+        console.error('Dashboard error:', error);
+        toast.error('Failed to load dashboard', {
+          description: error.message,
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
   };
+
+  // Loading skeleton
+  if (isLoading) {
+    return (
+      <PageTransition>
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="h-9 w-48 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+              <div className="h-5 w-64 bg-slate-200 dark:bg-slate-700 rounded mt-2 animate-pulse" />
+            </div>
+            <div className="h-10 w-28 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="bg-white dark:bg-slate-800 rounded-xl border p-6 animate-pulse">
+                <div className="h-4 w-20 bg-slate-200 dark:bg-slate-700 rounded mb-3" />
+                <div className="h-10 w-16 bg-slate-200 dark:bg-slate-700 rounded" />
+                <div className="h-4 w-24 bg-slate-200 dark:bg-slate-700 rounded mt-2" />
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-xl border p-6 animate-pulse">
+            <div className="h-6 w-32 bg-slate-200 dark:bg-slate-700 rounded mb-4" />
+            <div className="h-72 bg-slate-200 dark:bg-slate-700 rounded" />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {[...Array(2)].map((_, i) => (
+              <div key={i} className="bg-white dark:bg-slate-800 rounded-xl border p-6 animate-pulse">
+                <div className="h-6 w-40 bg-slate-200 dark:bg-slate-700 rounded mb-4" />
+                <div className="space-y-3">
+                  {[...Array(5)].map((_, j) => (
+                    <div key={j} className="h-10 bg-slate-200 dark:bg-slate-700 rounded" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </PageTransition>
+    );
+  }
+
+  if (!data) {
+    return (
+      <PageTransition>
+        <div className="flex flex-col items-center justify-center py-20">
+          <p className="text-slate-500">Failed to load dashboard data</p>
+          <Button onClick={() => window.location.reload()} className="mt-4">
+            Retry
+          </Button>
+        </div>
+      </PageTransition>
+    );
+  }
 
   return (
     <PageTransition>
@@ -55,58 +135,57 @@ export default function DashboardPage() {
           animate="animate"
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
         >
-          <NewStatsCard
+          <StatsCard
             title="Models"
-            value={mockDashboardData.stats.models.value}
+            value={data.stats.models.value}
             icon={Package}
-            trend={mockDashboardData.stats.models.trend}
-            trendValue={mockDashboardData.stats.models.change}
+            trend={data.stats.models.trend}
+            trendValue={data.stats.models.change}
             delay={0}
           />
-          <NewStatsCard
+          <StatsCard
             title="Machines"
-            value={mockDashboardData.stats.machines.value}
+            value={data.stats.machines.value}
             icon={Cpu}
-            trend={mockDashboardData.stats.machines.trend}
-            trendValue={mockDashboardData.stats.machines.change}
+            trend={data.stats.machines.trend}
+            trendValue={data.stats.machines.change}
             delay={0.1}
           />
-          <NewStatsCard
+          <StatsCard
             title="This Month"
-            value={mockDashboardData.stats.thisMonth.value}
+            value={data.stats.thisMonth.value}
             icon={FileText}
-            trend={mockDashboardData.stats.thisMonth.trend}
-            trendValue={mockDashboardData.stats.thisMonth.change}
+            trend={data.stats.thisMonth.trend}
+            trendValue={data.stats.thisMonth.change}
             delay={0.2}
           />
-          <NewStatsCard
-            title="Avg Match"
-            value={mockDashboardData.stats.avgMatch.value}
-            suffix="%"
+          <StatsCard
+            title="Avg Stations"
+            value={data.stats.avgMatch.value}
             icon={Target}
-            trend={mockDashboardData.stats.avgMatch.trend}
-            trendValue={mockDashboardData.stats.avgMatch.change}
+            trend={data.stats.avgMatch.trend}
+            trendValue={data.stats.avgMatch.change}
             delay={0.3}
           />
         </motion.div>
 
-        <RFQTrendChart data={mockDashboardData.trends} />
+        <RFQTrendChart data={data.trends} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <TopList
-            title="Top Matched Models"
+            title="Top Models (by Stations)"
             icon="🏆"
-            items={mockDashboardData.topModels}
+            items={data.topModels}
             onViewAll={() => window.location.href = '/models'}
           />
           <TopList
             title="Top Customers"
             icon="👥"
-            items={mockDashboardData.topCustomers}
+            items={data.topCustomers}
           />
         </div>
 
-        <RecentRFQTable rfqs={mockDashboardData.recentRFQs} />
+        <RecentRFQTable rfqs={data.recentRFQs} />
       </div>
     </PageTransition>
   );

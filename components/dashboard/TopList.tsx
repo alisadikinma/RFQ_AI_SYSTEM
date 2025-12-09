@@ -49,30 +49,36 @@ export function TopList({ title, icon, items, onViewAll }: TopListProps) {
         )}
       </div>
 
-      <div className="space-y-3">
-        {items.map((item, i) => (
-          <motion.div
-            key={item.id}
-            custom={i}
-            variants={listItemVariants}
-            initial="initial"
-            animate="animate"
-            className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700/50 last:border-0"
-          >
-            <div className="flex items-center gap-3">
-              <span className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-xs font-semibold text-slate-600 dark:text-slate-300">
-                {i + 1}
+      {items.length === 0 ? (
+        <div className="text-center py-8 text-slate-500">
+          No data available
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((item, i) => (
+            <motion.div
+              key={item.id}
+              custom={i}
+              variants={listItemVariants}
+              initial="initial"
+              animate="animate"
+              className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700/50 last:border-0"
+            >
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <span className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-xs font-semibold text-slate-600 dark:text-slate-300 shrink-0">
+                  {i + 1}
+                </span>
+                <span className="font-medium text-slate-900 dark:text-white truncate" title={item.name}>
+                  {item.name}
+                </span>
+              </div>
+              <span className="text-sm text-slate-500 dark:text-slate-400 tabular-nums font-medium shrink-0 ml-2">
+                {item.count}
               </span>
-              <span className="font-medium text-slate-900 dark:text-white">
-                {item.name}
-              </span>
-            </div>
-            <span className="text-sm text-slate-500 dark:text-slate-400 tabular-nums font-medium">
-              ({item.count})
-            </span>
-          </motion.div>
-        ))}
-      </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
     </motion.div>
   );
 }

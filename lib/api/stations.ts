@@ -22,6 +22,56 @@ export type StationMasterInput = Omit<StationMaster, 'id' | 'created_at' | 'upda
 export type Machine = StationMaster;
 export type MachineInput = StationMasterInput;
 
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/**
+ * Get paginated stations with filters (recommended for list view)
+ */
+export const getStationsPaginated = async (
+  page: number = 1,
+  pageSize: number = 20,
+  filters?: {
+    search?: string;
+    category?: string;
+  }
+): Promise<PaginatedResult<StationMaster>> => {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  let query = supabase
+    .from('station_master')
+    .select('*', { count: 'exact' });
+
+  // Apply filters
+  if (filters?.search) {
+    query = query.or(`code.ilike.%${filters.search}%,name.ilike.%${filters.search}%`);
+  }
+  if (filters?.category && filters.category !== 'All') {
+    query = query.eq('category', filters.category);
+  }
+
+  const { data, error, count } = await query
+    .order('category', { ascending: true })
+    .order('code', { ascending: true })
+    .range(from, to);
+
+  if (error) throw error;
+
+  return {
+    data: data as StationMaster[],
+    total: count || 0,
+    page,
+    pageSize,
+    totalPages: Math.ceil((count || 0) / pageSize),
+  };
+};
+
 /**
  * Get all stations from station_master table
  */
@@ -194,4 +244,19 @@ export const getStationsByTrigger = async (trigger: string) => {
 
   if (error) throw error;
   return data as StationMaster[];
+};
+
+/**
+ * Get unique categories for filter dropdown
+ */
+export const getStationCategories = async (): Promise<string[]> => {
+  const { data, error } = await supabase
+    .from('station_master')
+    .select('category')
+    .order('category');
+
+  if (error) throw error;
+  
+  const categories = [...new Set(data?.map(d => d.category) || [])];
+  return categories;
 };

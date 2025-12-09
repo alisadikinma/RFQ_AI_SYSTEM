@@ -1,32 +1,52 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Search, Package } from 'lucide-react';
+import { Plus, Search, Package, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatsCardSkeleton } from '@/components/shared/LoadingSkeleton';
 import { ModelCard } from '@/components/models/ModelCard';
-import { ModelWithDetails, getModels } from '@/lib/api/models';
+import { ModelListItem, getModelsList, getCustomerOptions, PaginatedResult } from '@/lib/api/models';
 import { containerVariants, itemVariants } from '@/lib/animations';
 
-export default function ModelsPage() {
-  const [models, setModels] = useState<ModelWithDetails[]>([]);
-  const [filteredModels, setFilteredModels] = useState<ModelWithDetails[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [customerFilter, setCustomerFilter] = useState('All');
-  const [statusFilter, setStatusFilter] = useState('All');
+const PAGE_SIZE = 18; // 3x6 grid
 
-  const loadModels = async () => {
+export default function ModelsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const [result, setResult] = useState<PaginatedResult<ModelListItem> | null>(null);
+  const [customers, setCustomers] = useState<{ id: string; code: string; name: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState('');
+  
+  // Get params from URL
+  const page = parseInt(searchParams.get('page') || '1');
+  const search = searchParams.get('search') || '';
+  const customer = searchParams.get('customer') || 'All';
+  const status = searchParams.get('status') || 'All';
+
+  // Sync search input with URL param on mount
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  const loadModels = useCallback(async () => {
+    setIsLoading(true);
     try {
-      const data = await getModels();
-      setModels(data);
-      setFilteredModels(data);
+      const data = await getModelsList(page, PAGE_SIZE, {
+        search: search || undefined,
+        customer: customer !== 'All' ? customer : undefined,
+        status: status !== 'All' ? status : undefined,
+      });
+      setResult(data);
     } catch (error: any) {
       toast.error('Failed to load models', {
         description: error.message,
@@ -34,37 +54,67 @@ export default function ModelsPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page, search, customer, status]);
 
-  useEffect(() => {
-    loadModels();
+  const loadCustomers = useCallback(async () => {
+    try {
+      const data = await getCustomerOptions();
+      setCustomers(data || []);
+    } catch (error) {
+      console.error('Failed to load customers', error);
+    }
   }, []);
 
   useEffect(() => {
-    let filtered = models;
+    loadCustomers();
+  }, [loadCustomers]);
 
-    if (searchQuery) {
-      filtered = filtered.filter(
-        (m) =>
-          m.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          m.customer.name.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+  useEffect(() => {
+    loadModels();
+  }, [loadModels]);
+
+  // Update URL params
+  const updateParams = useCallback((updates: Record<string, string>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value && value !== 'All' && value !== '') {
+        params.set(key, value);
+      } else {
+        params.delete(key);
+      }
+    });
+    // Reset to page 1 when filters change (except when changing page itself)
+    if (!('page' in updates)) {
+      params.delete('page');
     }
+    router.push(`/models?${params.toString()}`);
+  }, [router, searchParams]);
 
-    if (customerFilter !== 'All') {
-      filtered = filtered.filter((m) => m.customer.code === customerFilter);
+  // Debounced search using native setTimeout
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchInput(value);
+    
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
     }
+    
+    debounceRef.current = setTimeout(() => {
+      updateParams({ search: value });
+    }, 300);
+  };
 
-    if (statusFilter !== 'All') {
-      filtered = filtered.filter((m) => m.status === statusFilter);
-    }
+  const handleCustomerChange = (value: string) => {
+    updateParams({ customer: value });
+  };
 
-    setFilteredModels(filtered);
-  }, [searchQuery, customerFilter, statusFilter, models]);
+  const handleStatusChange = (value: string) => {
+    updateParams({ status: value });
+  };
 
-  const customers = ['All', ...Array.from(new Set(models.map((m) => m.customer.code)))];
-  const statuses = ['All', 'active', 'inactive'];
+  const handlePageChange = (newPage: number) => {
+    updateParams({ page: String(newPage) });
+  };
 
   return (
     <PageTransition>
@@ -97,37 +147,36 @@ export default function ModelsPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <Input
                 placeholder="Search models..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={handleSearchChange}
                 className="pl-10"
               />
             </div>
-            <Select value={customerFilter} onValueChange={setCustomerFilter}>
+            <Select value={customer} onValueChange={handleCustomerChange}>
               <SelectTrigger className="w-full md:w-48">
                 <SelectValue placeholder="Customer" />
               </SelectTrigger>
               <SelectContent>
-                {customers.map((customer) => (
-                  <SelectItem key={customer} value={customer}>
-                    {customer === 'All' ? 'All Customers' : customer}
+                <SelectItem value="All">All Customers</SelectItem>
+                {customers.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.code}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={status} onValueChange={handleStatusChange}>
               <SelectTrigger className="w-full md:w-40">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                {statuses.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {status === 'All' ? 'All Status' : status.charAt(0).toUpperCase() + status.slice(1)}
-                  </SelectItem>
-                ))}
+                <SelectItem value="All">All Status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
             </Select>
-            <div className="text-sm text-slate-500 flex items-center">
-              Showing {filteredModels.length}
+            <div className="text-sm text-slate-500 flex items-center whitespace-nowrap">
+              {result ? `${result.total} total` : '...'}
             </div>
           </div>
         </motion.div>
@@ -138,7 +187,7 @@ export default function ModelsPage() {
               <StatsCardSkeleton key={i} />
             ))}
           </div>
-        ) : filteredModels.length === 0 ? (
+        ) : !result || result.data.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -151,11 +200,11 @@ export default function ModelsPage() {
               No models found
             </h3>
             <p className="text-slate-500 dark:text-slate-400 mt-1">
-              {searchQuery || customerFilter !== 'All' || statusFilter !== 'All'
+              {search || customer !== 'All' || status !== 'All'
                 ? 'Try adjusting your filters'
                 : 'Add your first model to get started'}
             </p>
-            {!searchQuery && customerFilter === 'All' && statusFilter === 'All' && (
+            {!search && customer === 'All' && status === 'All' && (
               <Link href="/models/new">
                 <Button className="mt-4">
                   <Plus className="w-4 h-4 mr-2" />
@@ -165,18 +214,75 @@ export default function ModelsPage() {
             )}
           </motion.div>
         ) : (
-          <motion.div
-            variants={containerVariants}
-            initial="initial"
-            animate="animate"
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          >
-            {filteredModels.map((model) => (
-              <motion.div key={model.id} variants={itemVariants}>
-                <ModelCard model={model} />
-              </motion.div>
-            ))}
-          </motion.div>
+          <>
+            <motion.div
+              variants={containerVariants}
+              initial="initial"
+              animate="animate"
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            >
+              {result.data.map((model) => (
+                <motion.div key={model.id} variants={itemVariants}>
+                  <ModelCard model={model} />
+                </motion.div>
+              ))}
+            </motion.div>
+
+            {/* Pagination */}
+            {result.totalPages > 1 && (
+              <div className="flex items-center justify-between bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 p-4">
+                <div className="text-sm text-slate-500">
+                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, result.total)} of {result.total}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(page - 1)}
+                    disabled={page <= 1}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    Previous
+                  </Button>
+                  <div className="flex items-center gap-1">
+                    {[...Array(Math.min(5, result.totalPages))].map((_, i) => {
+                      let pageNum: number;
+                      if (result.totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (page <= 3) {
+                        pageNum = i + 1;
+                      } else if (page >= result.totalPages - 2) {
+                        pageNum = result.totalPages - 4 + i;
+                      } else {
+                        pageNum = page - 2 + i;
+                      }
+                      
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={page === pageNum ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => handlePageChange(pageNum)}
+                          className="w-8"
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(page + 1)}
+                    disabled={page >= result.totalPages}
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </PageTransition>
