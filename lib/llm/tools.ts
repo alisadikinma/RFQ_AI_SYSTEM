@@ -207,6 +207,7 @@ async function toolSearchKnowledge(query: string, maxResults: number = 5) {
 
 /**
  * Tool: Find similar models based on station list
+ * Uses Jaccard similarity on station codes
  */
 async function toolFindSimilarModels(
   stations: string[],
@@ -228,22 +229,31 @@ async function toolFindSimilarModels(
       return { success: false, error: 'No valid stations provided' };
     }
     
-    // Get all models with their stations
+    // Build query - join model_stations with station_master to get station codes
     let query = supabase
       .from('models')
       .select(`
         id,
         code,
         name,
+        status,
         customer:customers(id, code, name),
         model_stations(
-          station_code,
+          id,
+          machine_id,
           board_type,
           sequence,
-          manpower
+          manpower,
+          machine:station_master(
+            id,
+            code,
+            name,
+            category
+          )
         )
       `)
-      .limit(100);
+      .eq('status', 'active')
+      .limit(200);
     
     // Filter by customer if specified
     if (customerFilter) {
@@ -261,33 +271,63 @@ async function toolFindSimilarModels(
     
     const { data: models, error } = await query;
     
-    if (error) throw error;
+    if (error) {
+      console.error('Database query error:', error);
+      throw error;
+    }
+    
+    if (!models || models.length === 0) {
+      return {
+        success: true,
+        query_stations: normalizedStations,
+        total_searched: 0,
+        matches: [],
+        message: 'No models found in database',
+      };
+    }
     
     // Calculate Jaccard similarity for each model
-    const results = (models || []).map(model => {
-      const modelStations = (model.model_stations as any[])?.map(s => s.station_code.toUpperCase()) || [];
+    const results = models.map(model => {
+      // Extract station codes from joined data
+      const modelStationRows = (model.model_stations as any[]) || [];
+      const modelStations = modelStationRows
+        .map(ms => (ms.machine as any)?.code?.toUpperCase())
+        .filter(Boolean);
       const uniqueModelStations = [...new Set(modelStations)];
       
-      // Jaccard similarity
-      const intersection = normalizedStations.filter(s => 
-        uniqueModelStations.some(ms => ms.includes(s) || s.includes(ms))
+      // Jaccard similarity with fuzzy matching
+      const intersection = normalizedStations.filter(queryStation => 
+        uniqueModelStations.some(modelStation => 
+          modelStation === queryStation ||
+          modelStation.includes(queryStation) || 
+          queryStation.includes(modelStation)
+        )
       );
+      
       const union = new Set([...normalizedStations, ...uniqueModelStations]);
       const similarity = union.size > 0 ? (intersection.length / union.size) * 100 : 0;
       
       // Station overlap details
       const matchedStations = intersection;
-      const missingStations = normalizedStations.filter(s => 
-        !uniqueModelStations.some(ms => ms.includes(s) || s.includes(ms))
+      const missingStations = normalizedStations.filter(queryStation => 
+        !uniqueModelStations.some(modelStation => 
+          modelStation === queryStation ||
+          modelStation.includes(queryStation) || 
+          queryStation.includes(modelStation)
+        )
       );
-      const extraStations = uniqueModelStations.filter(ms =>
-        !normalizedStations.some(s => ms.includes(s) || s.includes(ms))
+      const extraStations = uniqueModelStations.filter(modelStation =>
+        !normalizedStations.some(queryStation => 
+          modelStation === queryStation ||
+          modelStation.includes(queryStation) || 
+          queryStation.includes(modelStation)
+        )
       );
       
       // Calculate total manpower
-      const totalManpower = (model.model_stations as any[])?.reduce(
+      const totalManpower = modelStationRows.reduce(
         (sum, s) => sum + (s.manpower || 0), 0
-      ) || 0;
+      );
       
       return {
         id: model.id,
@@ -316,7 +356,7 @@ async function toolFindSimilarModels(
     return {
       success: true,
       query_stations: normalizedStations,
-      total_searched: models?.length || 0,
+      total_searched: models.length,
       matches: filtered,
       message: filtered.length > 0 
         ? `Found ${filtered.length} similar models`
@@ -324,7 +364,12 @@ async function toolFindSimilarModels(
     };
   } catch (error) {
     console.error('Find similar models error:', error);
-    return { success: false, error: 'Search failed' };
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Search failed',
+      query_stations: stations,
+      matches: [],
+    };
   }
 }
 
@@ -348,16 +393,16 @@ async function toolGetModelDetails(modelId: string) {
         customer:customers(id, code, name),
         model_stations(
           id,
-          station_code,
+          machine_id,
           board_type,
           sequence,
           manpower,
-          cycle_time,
-          station:station_master(
+          machine:station_master(
             code,
             name,
             category,
-            description
+            description,
+            typical_cycle_time_sec
           )
         )
       `);
@@ -387,16 +432,17 @@ async function toolGetModelDetails(modelId: string) {
       if (!stationsByBoard[boardType]) {
         stationsByBoard[boardType] = [];
       }
+      const machine = ms.machine as any;
       stationsByBoard[boardType].push({
-        code: ms.station_code,
-        name: (ms.station as any)?.name || ms.station_code,
-        category: (ms.station as any)?.category || 'Other',
+        code: machine?.code || 'Unknown',
+        name: machine?.name || machine?.code || 'Unknown',
+        category: machine?.category || 'Other',
         sequence: ms.sequence,
         manpower: ms.manpower || 0,
-        cycle_time: ms.cycle_time || 0,
+        cycle_time: machine?.typical_cycle_time_sec || 0,
       });
       totalManpower += ms.manpower || 0;
-      totalCycleTime += ms.cycle_time || 0;
+      totalCycleTime += machine?.typical_cycle_time_sec || 0;
     }
     
     // Sort by sequence
@@ -448,28 +494,35 @@ async function toolGetCustomerStations(customerName: string) {
       return { success: false, error: `Customer "${customerName}" not found` };
     }
     
-    const { data: stations } = await supabase
+    // Get stations via model_stations joined with station_master
+    const { data: modelStations } = await supabase
       .from('model_stations')
       .select(`
-        station_code,
-        models!inner (id, customer_id)
+        machine_id,
+        machine:station_master(code, name),
+        model:models!inner(id, customer_id)
       `)
-      .eq('models.customer_id', customer.id);
+      .eq('model.customer_id', customer.id);
     
-    const stationCounts: Record<string, number> = {};
-    for (const row of stations || []) {
-      stationCounts[row.station_code] = (stationCounts[row.station_code] || 0) + 1;
+    const stationCounts: Record<string, { code: string; name: string; count: number }> = {};
+    for (const row of modelStations || []) {
+      const machine = row.machine as any;
+      const code = machine?.code || 'Unknown';
+      if (!stationCounts[code]) {
+        stationCounts[code] = { code, name: machine?.name || code, count: 0 };
+      }
+      stationCounts[code].count++;
     }
     
-    const sortedStations = Object.entries(stationCounts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([code, count]) => ({ code, usage_count: count }));
+    const sortedStations = Object.values(stationCounts)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
     
     return {
       success: true,
       customer: customer.name,
-      total_models: new Set((stations || []).map(s => (s.models as any)?.id)).size,
-      stations: sortedStations.slice(0, 20),
+      total_models: new Set((modelStations || []).map(s => (s.model as any)?.id)).size,
+      stations: sortedStations,
     };
   } catch (error) {
     console.error('Get customer stations error:', error);

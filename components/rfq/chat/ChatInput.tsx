@@ -10,6 +10,7 @@ import {
   X,
   FileSpreadsheet,
   FileText,
+  Image,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -88,6 +89,12 @@ export function ChatInput({ onSubmit, disabled, placeholder }: ChatInputProps) {
     ) {
       return <FileSpreadsheet className="h-4 w-4 text-green-600" />;
     }
+    if (
+      file.type.startsWith('image/') ||
+      /\.(png|jpg|jpeg|gif|webp)$/i.test(file.name)
+    ) {
+      return <Image className="h-4 w-4 text-purple-600" />;
+    }
     return <FileText className="h-4 w-4 text-blue-600" />;
   };
 
@@ -153,7 +160,7 @@ export function ChatInput({ onSubmit, disabled, placeholder }: ChatInputProps) {
           ref={fileInputRef}
           type="file"
           className="hidden"
-          accept=".xlsx,.xls,.csv,.pdf"
+          accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.gif,.webp"
           multiple
           onChange={handleFileChange}
         />

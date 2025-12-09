@@ -47,13 +47,24 @@ export async function POST(request: NextRequest) {
     const body: ChatRequest = await request.json();
     const { message, history, customerId, existingStations, image } = body;
 
-    // Validate message
-    if (!message || typeof message !== 'string') {
+    // Validate message - allow empty if image is present
+    if (typeof message !== 'string') {
       return NextResponse.json<ChatAPIResponse>(
-        { success: false, error: 'Message is required' },
+        { success: false, error: 'Message must be a string' },
         { status: 400 }
       );
     }
+    
+    // Require message OR image
+    if (!message.trim() && !image) {
+      return NextResponse.json<ChatAPIResponse>(
+        { success: false, error: 'Please provide a message or upload an image' },
+        { status: 400 }
+      );
+    }
+    
+    // Auto-fill message for image-only uploads
+    const effectiveMessage = message.trim() || 'Please extract the station list from this image.'
 
     // Check if agent is available
     if (!isAgentAvailable()) {
@@ -71,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     // Process with AI Agent (includes function calling + RAG + vision)
     const response = await processAgentMessage(
-      message,
+      effectiveMessage,
       agentHistory,
       { customerId, existingStations, image }
     );
