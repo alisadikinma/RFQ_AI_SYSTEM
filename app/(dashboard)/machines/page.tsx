@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { Plus, Search, Edit, Trash2, Factory, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,14 +14,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { TableRowSkeleton } from '@/components/shared/LoadingSkeleton';
 import { DeleteDialog } from '@/components/shared/DeleteDialog';
 import { MachineDialog } from '@/components/machines/MachineDialog';
-import { 
-  Machine, 
-  deleteMachine, 
-  getMachineUsageCount, 
-  getStationsPaginated, 
-  getStationCategories,
-  PaginatedResult 
-} from '@/lib/api/stations';
+import { Machine, deleteMachine, getMachineUsageCount } from '@/lib/api/stations';
+import { useStationsPaginated, useStationCategories } from '@/lib/hooks/use-queries';
 import { containerVariants } from '@/lib/animations';
 
 const PAGE_SIZE = 15;
@@ -42,11 +37,9 @@ const rowVariants = {
 export default function MachinesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [result, setResult] = useState<PaginatedResult<Machine> | null>(null);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchInput, setSearchInput] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
@@ -59,44 +52,25 @@ export default function MachinesPage() {
   const search = searchParams.get('search') || '';
   const category = searchParams.get('category') || 'All';
 
+  // ✅ React Query hooks - dengan caching otomatis!
+  const { data: result, isLoading, isFetching } = useStationsPaginated({
+    page,
+    pageSize: PAGE_SIZE,
+    search: search || undefined,
+    category: category !== 'All' ? category : undefined,
+  });
+  
+  const { data: categories = [] } = useStationCategories();
+
   // Sync search input with URL param on mount
   useEffect(() => {
     setSearchInput(search);
   }, [search]);
 
-  const loadMachines = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await getStationsPaginated(page, PAGE_SIZE, {
-        search: search || undefined,
-        category: category !== 'All' ? category : undefined,
-      });
-      setResult(data);
-    } catch (error: any) {
-      toast.error('Failed to load machines', {
-        description: error.message,
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, search, category]);
-
-  const loadCategories = useCallback(async () => {
-    try {
-      const data = await getStationCategories();
-      setCategories(data);
-    } catch (error) {
-      console.error('Failed to load categories', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadCategories();
-  }, [loadCategories]);
-
-  useEffect(() => {
-    loadMachines();
-  }, [loadMachines]);
+  // Invalidate cache and refetch
+  const refreshMachines = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['stations'] });
+  }, [queryClient]);
 
   // Update URL params
   const updateParams = useCallback((updates: Record<string, string>) => {
@@ -108,7 +82,6 @@ export default function MachinesPage() {
         params.delete(key);
       }
     });
-    // Reset to page 1 when filters change
     if (!('page' in updates)) {
       params.delete('page');
     }
@@ -166,7 +139,7 @@ export default function MachinesPage() {
       toast.success('Machine deleted successfully', {
         description: `${machineToDelete.code} - ${machineToDelete.name}`,
       });
-      loadMachines();
+      refreshMachines();
     } catch (error: any) {
       toast.error('Failed to delete machine', {
         description: error.message,
@@ -225,8 +198,11 @@ export default function MachinesPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <div className="text-sm text-slate-500 flex items-center whitespace-nowrap">
+              <div className="text-sm text-slate-500 flex items-center whitespace-nowrap gap-2">
                 {result ? `${result.total} total` : '...'}
+                {isFetching && !isLoading && (
+                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                )}
               </div>
             </div>
           </div>
@@ -384,7 +360,7 @@ export default function MachinesPage() {
         isOpen={isDialogOpen}
         onClose={() => setIsDialogOpen(false)}
         machine={selectedMachine}
-        onSuccess={loadMachines}
+        onSuccess={refreshMachines}
       />
 
       <DeleteDialog

@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Plus, Search, Package, ChevronLeft, ChevronRight } from 'lucide-react';
-import { toast } from 'sonner';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { PageTransition } from '@/components/layout/PageTransition';
@@ -12,19 +11,16 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatsCardSkeleton } from '@/components/shared/LoadingSkeleton';
 import { ModelCard } from '@/components/models/ModelCard';
-import { ModelListItem, getModelsList, getCustomerOptions, PaginatedResult } from '@/lib/api/models';
+import { useModelsList, useCustomerOptions, usePrefetchModel } from '@/lib/hooks/use-queries';
 import { containerVariants, itemVariants } from '@/lib/animations';
 
-const PAGE_SIZE = 18; // 3x6 grid
+const PAGE_SIZE = 18;
 
 export default function ModelsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   
-  const [result, setResult] = useState<PaginatedResult<ModelListItem> | null>(null);
-  const [customers, setCustomers] = useState<{ id: string; code: string; name: string }[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchInput, setSearchInput] = useState('');
   
   // Get params from URL
@@ -33,45 +29,24 @@ export default function ModelsPage() {
   const customer = searchParams.get('customer') || 'All';
   const status = searchParams.get('status') || 'All';
 
+  // ✅ React Query hooks - dengan caching otomatis!
+  const { data: result, isLoading, isFetching } = useModelsList({
+    page,
+    pageSize: PAGE_SIZE,
+    search: search || undefined,
+    customer: customer !== 'All' ? customer : undefined,
+    status: status !== 'All' ? status : undefined,
+  });
+  
+  const { data: customers = [] } = useCustomerOptions();
+  
+  // Prefetch untuk hover
+  const prefetchModel = usePrefetchModel();
+
   // Sync search input with URL param on mount
   useEffect(() => {
     setSearchInput(search);
   }, [search]);
-
-  const loadModels = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await getModelsList(page, PAGE_SIZE, {
-        search: search || undefined,
-        customer: customer !== 'All' ? customer : undefined,
-        status: status !== 'All' ? status : undefined,
-      });
-      setResult(data);
-    } catch (error: any) {
-      toast.error('Failed to load models', {
-        description: error.message,
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, search, customer, status]);
-
-  const loadCustomers = useCallback(async () => {
-    try {
-      const data = await getCustomerOptions();
-      setCustomers(data || []);
-    } catch (error) {
-      console.error('Failed to load customers', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadCustomers();
-  }, [loadCustomers]);
-
-  useEffect(() => {
-    loadModels();
-  }, [loadModels]);
 
   // Update URL params
   const updateParams = useCallback((updates: Record<string, string>) => {
@@ -83,14 +58,13 @@ export default function ModelsPage() {
         params.delete(key);
       }
     });
-    // Reset to page 1 when filters change (except when changing page itself)
     if (!('page' in updates)) {
       params.delete('page');
     }
     router.push(`/models?${params.toString()}`);
   }, [router, searchParams]);
 
-  // Debounced search using native setTimeout
+  // Debounced search
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setSearchInput(value);
@@ -175,8 +149,12 @@ export default function ModelsPage() {
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
             </Select>
-            <div className="text-sm text-slate-500 flex items-center whitespace-nowrap">
+            <div className="text-sm text-slate-500 flex items-center whitespace-nowrap gap-2">
               {result ? `${result.total} total` : '...'}
+              {/* Show subtle loading indicator for background refetch */}
+              {isFetching && !isLoading && (
+                <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+              )}
             </div>
           </div>
         </motion.div>
@@ -222,8 +200,13 @@ export default function ModelsPage() {
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
             >
               {result.data.map((model) => (
-                <motion.div key={model.id} variants={itemVariants}>
-                  <ModelCard model={model} />
+                <motion.div 
+                  key={model.id} 
+                  variants={itemVariants}
+                  // ✅ Prefetch data saat hover - navigasi jadi instant!
+                  onMouseEnter={() => prefetchModel(model.id)}
+                >
+                  <ModelCard model={model as any} />
                 </motion.div>
               ))}
             </motion.div>

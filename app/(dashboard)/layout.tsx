@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/supabase/auth-provider';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { MobileNav } from '@/components/layout/MobileNav';
-import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton';
+
+// Key must match auth-provider
+const AUTH_HINT_KEY = 'rfq_auth_hint';
 
 export default function DashboardLayout({
   children,
@@ -15,29 +17,50 @@ export default function DashboardLayout({
 }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
-
+  
+  // ✅ Check localStorage hint for instant decision
+  const [hasHint, setHasHint] = useState(false);
+  
   useEffect(() => {
-    if (!loading && !user) {
-      router.push('/login');
+    // Check hint on mount (instant, no network)
+    try {
+      setHasHint(localStorage.getItem(AUTH_HINT_KEY) === 'true');
+    } catch {
+      setHasHint(false);
     }
-  }, [user, loading, router]);
+  }, []);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <LoadingSkeleton className="w-12 h-12 mx-auto" variant="circular" />
-          <p className="text-slate-600 dark:text-slate-400">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    // Only redirect when we're sure there's no user
+    // Don't redirect while still loading or if we have a hint
+    if (!loading && !user && !hasHint) {
+      router.replace('/login');
+    }
+    
+    // If loading finished and no user but had hint, clear hint and redirect
+    if (!loading && !user && hasHint) {
+      try {
+        localStorage.removeItem(AUTH_HINT_KEY);
+      } catch {}
+      router.replace('/login');
+    }
+  }, [user, loading, router, hasHint]);
 
-  if (!user) {
+  // ✅ Show layout immediately if we have hint OR user
+  // This makes post-login feel instant
+  const shouldRender = hasHint || user || loading;
+  
+  if (!shouldRender) {
     return null;
   }
+
+  // ✅ No more loading skeleton! 
+  // The dashboard page itself handles its own loading state
+  // This makes the sidebar/header appear instantly
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">

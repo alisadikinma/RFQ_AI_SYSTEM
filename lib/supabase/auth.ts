@@ -1,5 +1,8 @@
 import { supabase } from './client';
 
+// Key must match auth-provider
+const AUTH_HINT_KEY = 'rfq_auth_hint';
+
 export interface SignUpData {
   email: string;
   password: string;
@@ -33,10 +36,25 @@ export const signIn = async ({ email, password }: SignInData) => {
   });
 
   if (error) throw error;
+  
+  // ✅ Set auth hint for faster subsequent loads
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(AUTH_HINT_KEY, 'true');
+    } catch {}
+  }
+  
   return data;
 };
 
 export const signOut = async () => {
+  // ✅ Clear auth hint first
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(AUTH_HINT_KEY);
+    } catch {}
+  }
+  
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 };

@@ -29,14 +29,18 @@ export function LoginForm() {
 
     try {
       await signIn({ email, password });
+      
       toast.success('Signed in successfully');
-      router.push('/dashboard');
+      
+      // ✅ Use replace instead of push for cleaner history
+      router.replace('/dashboard');
+      
     } catch (err: any) {
       setError(true);
       toast.error(err.message || 'Failed to sign in');
-    } finally {
       setIsLoading(false);
     }
+    // Note: Don't set isLoading to false on success - let the redirect happen
   };
 
   return (

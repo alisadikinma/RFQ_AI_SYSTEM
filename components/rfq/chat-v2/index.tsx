@@ -32,12 +32,15 @@ export { SimilarModelCards } from "./results/SimilarModelCards";
 export { ModelCard } from "./results/ModelCard";
 export { ScoreRing } from "./results/ScoreRing";
 export type { ExtractedStation } from "./results/ExtractedDataTable";
-export type { SimilarModel } from "./results/ModelCard";
+export type { SimilarModel, BoardVariant } from "./results/ModelCard";
 
 // Modal components (Phase 7D)
 export { ModelDetailModal } from "./results/ModelDetailModal";
 export { ComparisonTable } from "./results/ComparisonTable";
 export { InvestmentSummary } from "./results/InvestmentSummary";
+
+// Board components (Phase 7E)
+export { BoardStationsTable } from "./results/BoardStationsTable";
 
 // Animation configs
 export * from "./animations/motion-variants";

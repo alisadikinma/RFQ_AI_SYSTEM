@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { MessageList } from "./MessageList";
@@ -18,7 +18,6 @@ function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result as string;
-      // Remove data:image/xxx;base64, prefix
       const base64 = result.split(',')[1];
       resolve(base64);
     };
@@ -43,6 +42,10 @@ export function ChatMain({ chatId }: ChatMainProps) {
   const [currentStations, setCurrentStations] = useState<ExtractedStation[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const stepIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // ✅ Track pending message for new chats
+  const pendingMessageRef = useRef<{ content: string; files?: File[] } | null>(null);
+  const isProcessingRef = useRef(false);
 
   // Load messages when chat changes (async)
   useEffect(() => {
@@ -59,6 +62,16 @@ export function ChatMain({ chatId }: ChatMainProps) {
         }
 
         setIsLoadingMessages(false);
+        
+        // ✅ Process pending message if exists (after navigation to new chat)
+        if (pendingMessageRef.current && !isProcessingRef.current) {
+          const pending = pendingMessageRef.current;
+          pendingMessageRef.current = null;
+          // Process after a small delay to ensure state is updated
+          setTimeout(() => {
+            processMessage(chatId, pending.content, pending.files);
+          }, 100);
+        }
       } else {
         setMessages([]);
         setCurrentStations([]);
@@ -81,22 +94,15 @@ export function ChatMain({ chatId }: ChatMainProps) {
     };
   }, []);
 
-  const handleSendMessage = async (content: string, files?: File[]) => {
-    let currentChatId: string | undefined = chatId;
-
-    // Create new chat if needed (async)
-    if (!currentChatId) {
-      const title = content.slice(0, 50) + (content.length > 50 ? "..." : "");
-      const newSessionId = await createSession(title);
-      if (!newSessionId) {
-        console.error("Failed to create session");
-        return;
-      }
-      currentChatId = newSessionId;
-      // Navigate to the new chat URL
-      router.push(`/chat/${currentChatId}`);
+  // ✅ Separate function to process message (used for both new and existing chats)
+  const processMessage = useCallback(async (sessionId: string, content: string, files?: File[]) => {
+    if (isProcessingRef.current) {
+      console.log('⏳ Already processing, skipping...');
+      return;
     }
-
+    
+    isProcessingRef.current = true;
+    
     // Optimistic UI update - show message immediately
     const tempUserMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -114,7 +120,6 @@ export function ChatMain({ chatId }: ChatMainProps) {
       setShowProcessing(true);
       setProcessingStep(0);
 
-      // Simulate step progression (replace with real progress later)
       stepIntervalRef.current = setInterval(() => {
         setProcessingStep(prev => {
           if (prev >= DEFAULT_PROCESSING_STEPS.length - 1) {
@@ -130,7 +135,7 @@ export function ChatMain({ chatId }: ChatMainProps) {
 
     try {
       // Save user message to database
-      await addMessage(currentChatId, {
+      await addMessage(sessionId, {
         role: "user",
         content,
         files: files?.map(f => ({ name: f.name, type: f.type, size: f.size })),
@@ -145,7 +150,7 @@ export function ChatMain({ chatId }: ChatMainProps) {
         }
       }
 
-      // Build conversation history for API
+      // Build conversation history for API (use current messages state)
       const history = messages.map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -153,7 +158,9 @@ export function ChatMain({ chatId }: ChatMainProps) {
 
       // Call RFQ Chat API with timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      
+      console.log('🚀 Calling API...', { message: content.slice(0, 50) });
       
       const response = await fetch('/api/rfq/chat', {
         method: 'POST',
@@ -169,6 +176,8 @@ export function ChatMain({ chatId }: ChatMainProps) {
       clearTimeout(timeoutId);
 
       const data = await response.json();
+      
+      console.log('📥 API Response:', { success: data.success, hasContent: !!data.content });
 
       if (!data.success) {
         throw new Error(data.error || 'API request failed');
@@ -203,7 +212,7 @@ export function ChatMain({ chatId }: ChatMainProps) {
       }
 
       // Save assistant response to database
-      const assistantResponse = await addMessage(currentChatId, {
+      const assistantResponse = await addMessage(sessionId, {
         role: "assistant",
         content: data.content,
         extractedStations,
@@ -214,9 +223,8 @@ export function ChatMain({ chatId }: ChatMainProps) {
         setMessages(prev => [...prev, assistantResponse]);
       }
     } catch (error) {
-      console.error("Error sending message:", error);
+      console.error("Error processing message:", error);
       
-      // Determine error message
       let errorMsg = 'Gagal memproses pesan';
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
@@ -226,7 +234,6 @@ export function ChatMain({ chatId }: ChatMainProps) {
         }
       }
       
-      // Show error message to user
       const errorMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -236,14 +243,47 @@ export function ChatMain({ chatId }: ChatMainProps) {
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
-      // Clear interval if still running
       if (stepIntervalRef.current) {
         clearInterval(stepIntervalRef.current);
       }
       setIsLoading(false);
       setShowProcessing(false);
       setProcessingStep(0);
+      isProcessingRef.current = false;
     }
+  }, [messages, addMessage]);
+
+  const handleSendMessage = async (content: string, files?: File[]) => {
+    // If already processing, ignore
+    if (isProcessingRef.current) {
+      console.log('⏳ Already processing, ignoring send');
+      return;
+    }
+    
+    let currentChatId: string | undefined = chatId;
+
+    // ✅ For NEW CHAT: Create session first, then navigate
+    // The message will be processed after navigation completes
+    if (!currentChatId) {
+      const title = content.slice(0, 50) + (content.length > 50 ? "..." : "");
+      
+      // Store pending message BEFORE navigation
+      pendingMessageRef.current = { content, files };
+      
+      const newSessionId = await createSession(title);
+      if (!newSessionId) {
+        console.error("Failed to create session");
+        pendingMessageRef.current = null;
+        return;
+      }
+      
+      // Navigate to new chat - message will be processed in useEffect
+      router.push(`/chat/${newSessionId}`);
+      return;
+    }
+
+    // ✅ For EXISTING CHAT: Process directly
+    await processMessage(currentChatId, content, files);
   };
 
   const handleStationsChange = (stations: ExtractedStation[]) => {
@@ -252,7 +292,6 @@ export function ChatMain({ chatId }: ChatMainProps) {
 
   const handleFindSimilar = async (stations: ExtractedStation[]) => {
     setCurrentStations(stations);
-    // Trigger similarity search
     await handleSendMessage(
       `Mencari model serupa untuk ${stations.length} stations: ${stations.map(s => s.code).join(", ")}`
     );
@@ -265,7 +304,6 @@ export function ChatMain({ chatId }: ChatMainProps) {
 
   const handleUseModel = (model: SimilarModel) => {
     setShowModelModal(false);
-    // Add confirmation message
     handleSendMessage(
       `Menggunakan model ${model.customerName} - ${model.code} sebagai referensi.`
     );
@@ -302,7 +340,6 @@ export function ChatMain({ chatId }: ChatMainProps) {
         onSelectModel={handleSelectModel}
       />
 
-      {/* Model Detail Modal */}
       <ModelDetailModal
         isOpen={showModelModal}
         onClose={() => setShowModelModal(false)}

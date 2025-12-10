@@ -6,14 +6,39 @@ import { ScoreRing } from "./ScoreRing";
 import { cardVariants } from "../animations/motion-variants";
 import { cn } from "@/lib/utils";
 
+export interface BoardVariant {
+  id: string;
+  code: string;
+  boardType: string;
+  emmcSize?: string;
+  ramSize?: string;
+  investment: number;
+  stationCount: number;
+  manpower: number;
+  uph?: number;
+}
+
 export interface SimilarModel {
   id: string;
   code: string;
+  typeModel?: string;
   customerName: string;
   customerCode: string;
   similarity: number;
-  stationCount: number;
-  matchedStations: number;
+  // Aggregated totals
+  totalStations?: number;
+  totalManpower?: number;
+  totalInvestment?: number;
+  totalBoards?: number;
+  // Station matching
+  matchedStations: number | string[];
+  missingStations?: string[];
+  extraStations?: string[];
+  allStations?: string[];
+  // Board variants
+  boards?: BoardVariant[];
+  // Legacy compatibility
+  stationCount?: number;
   manpower: number;
   uph: number;
   cycleTime?: number;
@@ -34,6 +59,13 @@ const rankConfig = {
 
 export function ModelCard({ model, rank, index, onClick }: ModelCardProps) {
   const config = rankConfig[rank];
+
+  // Get station count (support both formats)
+  const stationCount = model.totalStations || model.stationCount || 0;
+  const manpower = model.totalManpower || model.manpower || 0;
+  const matchedCount = typeof model.matchedStations === 'number'
+    ? model.matchedStations
+    : model.matchedStations?.length || 0;
 
   return (
     <motion.div
@@ -72,14 +104,19 @@ export function ModelCard({ model, rank, index, onClick }: ModelCardProps) {
         <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
           {model.customerName}
         </p>
-        <h3 className="text-lg font-bold text-slate-800 dark:text-white truncate">{model.code}</h3>
+        <h3 className="text-lg font-bold text-slate-800 dark:text-white truncate">
+          {model.code || model.typeModel}
+        </h3>
+        {model.totalBoards && model.totalBoards > 1 && (
+          <p className="text-xs text-blue-500 mt-1">{model.totalBoards} boards</p>
+        )}
       </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-3 gap-2 mb-4">
         <div className="text-center p-2 rounded-lg bg-slate-100 dark:bg-slate-900/50">
           <Users className="h-4 w-4 text-blue-500 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-slate-800 dark:text-white">{model.manpower}</p>
+          <p className="text-sm font-semibold text-slate-800 dark:text-white">{manpower}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">MP</p>
         </div>
         <div className="text-center p-2 rounded-lg bg-slate-100 dark:bg-slate-900/50">
@@ -89,7 +126,7 @@ export function ModelCard({ model, rank, index, onClick }: ModelCardProps) {
         </div>
         <div className="text-center p-2 rounded-lg bg-slate-100 dark:bg-slate-900/50">
           <Clock className="h-4 w-4 text-purple-500 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-slate-800 dark:text-white">{model.stationCount}</p>
+          <p className="text-sm font-semibold text-slate-800 dark:text-white">{stationCount}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">Stations</p>
         </div>
       </div>
@@ -97,7 +134,7 @@ export function ModelCard({ model, rank, index, onClick }: ModelCardProps) {
       {/* Match Info */}
       <div className="flex items-center justify-between text-sm">
         <span className="text-slate-500 dark:text-slate-400">
-          {model.matchedStations}/{model.stationCount} stations match
+          {matchedCount}/{stationCount} stations match
         </span>
         <ChevronRight className="h-4 w-4 text-slate-400" />
       </div>

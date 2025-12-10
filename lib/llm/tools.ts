@@ -32,6 +32,8 @@ export const AGENT_TOOLS = [
     description: `Query the database for any information about models, customers, stations/machines, production data, and statistics. 
     
 USE THIS TOOL for questions like:
+- "Customer mana yang investasi paling besar?" (query_type: customers_by_investment)
+- "Customer dengan model terbanyak?" (query_type: customers_by_models)
 - "Model mana yang investasi paling besar?" (query_type: models_by_investment)
 - "List model yang menggunakan station RFT + CAL" (query_type: models_by_stations, stations: ["RFT", "CAL"])
 - "Customer apa saja yang ada?" (query_type: list_customers)
@@ -55,6 +57,8 @@ This tool can answer ANY database-related question in Indonesian, English, or Ch
             'models_by_stations',
             'models_by_investment',
             'models_by_manpower',
+            'customers_by_investment',
+            'customers_by_models',
             'customer_stats',
             'station_usage_stats',
             'search_models',
@@ -459,6 +463,165 @@ async function toolQueryDatabase(args: Record<string, unknown>) {
           summary: `Top ${limit} model dengan investasi/manpower terbesar`,
           note: 'Sorted by total manpower (proxy for investment)',
         };
+      }
+      
+      case 'customers_by_investment': {
+        console.log('📊 Fetching customers by investment...');
+        
+        try {
+          // ✅ Step 1: Get all customers
+          const { data: customers, error: custError } = await supabase
+            .from('customers')
+            .select('id, code, name, country');
+          
+          if (custError) {
+            console.error('Error fetching customers:', custError);
+            throw custError;
+          }
+          
+          if (!customers || customers.length === 0) {
+            return {
+              success: true,
+              query_type: 'customers_by_investment',
+              total: 0,
+              customers: [],
+              summary: 'Tidak ada customer dalam database',
+            };
+          }
+          
+          // ✅ Step 2: Get all model_stations with customer info via models
+          const { data: modelStations, error: msError } = await supabase
+            .from('model_stations')
+            .select(`
+              manpower,
+              model:models!inner(
+                id,
+                customer_id
+              )
+            `);
+          
+          if (msError) {
+            console.error('Error fetching model_stations:', msError);
+            throw msError;
+          }
+          
+          // ✅ Step 3: Aggregate by customer
+          const customerStats: Record<string, { 
+            total_models: Set<string>; 
+            total_stations: number; 
+            total_manpower: number 
+          }> = {};
+          
+          for (const ms of modelStations || []) {
+            const model = ms.model as any;
+            const customerId = model?.customer_id;
+            if (!customerId) continue;
+            
+            if (!customerStats[customerId]) {
+              customerStats[customerId] = {
+                total_models: new Set(),
+                total_stations: 0,
+                total_manpower: 0,
+              };
+            }
+            
+            customerStats[customerId].total_models.add(model.id);
+            customerStats[customerId].total_stations += 1;
+            customerStats[customerId].total_manpower += (ms.manpower || 0);
+          }
+          
+          // ✅ Step 4: Build result with customer info
+          const customersWithInvestment = customers
+            .map(c => {
+              const stats = customerStats[c.id];
+              return {
+                code: c.code,
+                name: c.name,
+                country: c.country || 'N/A',
+                total_models: stats?.total_models.size || 0,
+                total_stations: stats?.total_stations || 0,
+                total_manpower: stats?.total_manpower || 0,
+              };
+            })
+            .filter(c => c.total_models > 0)
+            .sort((a, b) => b.total_manpower - a.total_manpower)
+            .slice(0, limit);
+          
+          console.log(`✅ Found ${customersWithInvestment.length} customers with investment data`);
+          
+          return {
+            success: true,
+            query_type: 'customers_by_investment',
+            total: customersWithInvestment.length,
+            customers: customersWithInvestment,
+            summary: `Top ${limit} customer dengan investasi/manpower terbesar`,
+            note: 'Investasi dihitung dari total manpower semua model',
+          };
+        } catch (innerError) {
+          console.error('customers_by_investment error:', innerError);
+          return {
+            success: false,
+            error: innerError instanceof Error ? innerError.message : 'Query failed',
+          };
+        }
+      }
+      
+      case 'customers_by_models': {
+        console.log('📊 Fetching customers by model count...');
+        
+        try {
+          // Step 1: Get customers
+          const { data: customers, error: custError } = await supabase
+            .from('customers')
+            .select('id, code, name, country');
+          
+          if (custError) throw custError;
+          
+          // Step 2: Get model counts per customer
+          const { data: models, error: modelError } = await supabase
+            .from('models')
+            .select('customer_id')
+            .eq('status', 'active');
+          
+          if (modelError) throw modelError;
+          
+          // Step 3: Count models per customer
+          const modelCounts: Record<string, number> = {};
+          for (const m of models || []) {
+            const cid = m.customer_id;
+            if (cid) {
+              modelCounts[cid] = (modelCounts[cid] || 0) + 1;
+            }
+          }
+          
+          // Step 4: Build result
+          const customersByModels = (customers || [])
+            .map(c => ({
+              code: c.code,
+              name: c.name,
+              country: c.country || 'N/A',
+              total_models: modelCounts[c.id] || 0,
+            }))
+            .filter(c => c.total_models > 0)
+            .sort((a, b) => b.total_models - a.total_models)
+            .slice(0, limit);
+          
+          console.log(`✅ Found ${customersByModels.length} customers with models`);
+          
+          return {
+            success: true,
+            query_type: 'customers_by_models',
+            total: customersByModels.length,
+            customers: customersByModels,
+            summary: `Top ${limit} customer dengan jumlah model terbanyak`,
+          };
+        } catch (innerError) {
+          console.error('customers_by_models error:', innerError);
+          return {
+            success: false,
+            error: innerError instanceof Error ? innerError.message : 'Query failed',
+          };
+        }
       }
       
       case 'customer_stats': {

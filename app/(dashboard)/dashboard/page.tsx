@@ -1,17 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Package, Cpu, FileText, Target, Plus } from 'lucide-react';
 import Link from 'next/link';
-import { toast } from 'sonner';
 import { PageTransition } from '@/components/layout/PageTransition';
 import { StatsCard } from '@/components/dashboard/StatsCard';
 import { RFQTrendChart } from '@/components/dashboard/RFQTrendChart';
 import { TopList } from '@/components/dashboard/TopList';
 import { RecentRFQTable } from '@/components/dashboard/RecentRFQTable';
 import { Button } from '@/components/ui/button';
-import { getDashboardData, DashboardData } from '@/lib/api/dashboard';
+import { useDashboardData } from '@/lib/hooks/use-queries';
 
 const containerVariants = {
   animate: {
@@ -20,25 +18,8 @@ const containerVariants = {
 };
 
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const result = await getDashboardData();
-        setData(result);
-      } catch (error: any) {
-        console.error('Dashboard error:', error);
-        toast.error('Failed to load dashboard', {
-          description: error.message,
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    loadData();
-  }, []);
+  // ✅ React Query dengan caching - instant load setelah pertama kali!
+  const { data, isLoading, error, isFetching } = useDashboardData();
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -92,7 +73,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!data) {
+  if (error || !data) {
     return (
       <PageTransition>
         <div className="flex flex-col items-center justify-center py-20">
@@ -113,9 +94,13 @@ export default function DashboardPage() {
             <motion.h1
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="text-3xl font-bold text-slate-900 dark:text-white"
+              className="text-3xl font-bold text-slate-900 dark:text-white flex items-center gap-2"
             >
               {getGreeting()}! ☀️
+              {/* Subtle indicator for background refresh */}
+              {isFetching && (
+                <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+              )}
             </motion.h1>
             <p className="text-slate-600 dark:text-slate-400 mt-1">
               Overview of your RFQ activities

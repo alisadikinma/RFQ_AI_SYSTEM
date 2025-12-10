@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Dialog,
@@ -10,12 +11,36 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { X, FileText, FileSpreadsheet, CheckCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  X,
+  FileText,
+  FileSpreadsheet,
+  CheckCircle,
+  Cpu,
+  CircuitBoard,
+  Lightbulb,
+  Usb,
+  Radio,
+  Box,
+  LayoutGrid,
+} from "lucide-react";
 import { SimilarModel } from "./ModelCard";
 import { ExtractedStation } from "./ExtractedDataTable";
 import { ComparisonTable } from "./ComparisonTable";
 import { InvestmentSummary } from "./InvestmentSummary";
+import { BoardStationsTable } from "./BoardStationsTable";
 import { ScoreRing } from "./ScoreRing";
+
+// Board type icons
+const BOARD_ICONS: Record<string, React.ElementType> = {
+  "Main Board": Cpu,
+  "Sub Board": CircuitBoard,
+  "LED Board": Lightbulb,
+  "USB Board": Usb,
+  "SUB_ANT Board": Radio,
+  default: Box,
+};
 
 interface ModelDetailModalProps {
   isOpen: boolean;
@@ -51,15 +76,52 @@ export function ModelDetailModal({
   queryStations,
   onUseModel,
 }: ModelDetailModalProps) {
+  const [activeTab, setActiveTab] = useState<string>("overview");
+
   if (!model) return null;
 
   const rankEmoji =
-    model.similarity >= 0.85 ? "🥇" :
-    model.similarity >= 0.70 ? "🥈" : "🥉";
+    model.similarity >= 0.85
+      ? "🥇"
+      : model.similarity >= 0.7
+        ? "🥈"
+        : "🥉";
+
+  // Check if model has boards data
+  const hasBoards = model.boards && model.boards.length > 0;
+
+  // Format currency
+  const formatRupiah = (value: number) => {
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  // Get model stations for comparison (from allStations or generate from boards)
+  const getModelStations = (): string[] => {
+    if (model.allStations && model.allStations.length > 0) {
+      return model.allStations;
+    }
+    // Fallback to common stations based on count
+    const commonStations = [
+      "MBT",
+      "CAL1",
+      "CAL2",
+      "RFT",
+      "WIFIBT",
+      "4G_INSTRUMENT",
+      "MAINBOARD_MMI",
+      "VISUAL",
+      "PACKING",
+    ];
+    return commonStations.slice(0, model.stationCount || model.totalStations);
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] sm:max-h-[85vh] p-0 gap-0 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 overflow-hidden mx-2 sm:mx-auto">
+      <DialogContent className="max-w-5xl max-h-[90vh] sm:max-h-[85vh] p-0 gap-0 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 overflow-hidden mx-2 sm:mx-auto">
         <AnimatePresence mode="wait">
           <motion.div
             key={model.id}
@@ -80,11 +142,23 @@ export function ModelDetailModal({
 
                 {/* Model Info */}
                 <div className="flex-1">
-                  <DialogTitle className="text-xl font-bold text-slate-800 dark:text-white">
-                    {model.customerName} - {model.code}
+                  <DialogTitle className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-3">
+                    {model.customerName} - {model.code || model.typeModel}
+                    {hasBoards && (
+                      <Badge variant="secondary" className="ml-2">
+                        {model.totalBoards || model.boards?.length} Board
+                        {(model.totalBoards || model.boards?.length || 0) > 1 ? "s" : ""}
+                      </Badge>
+                    )}
                   </DialogTitle>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    {model.matchedStations} dari {model.stationCount} stations match
+                    {typeof model.matchedStations === 'number'
+                      ? model.matchedStations
+                      : model.matchedStations?.length || 0}{" "}
+                    dari {model.stationCount || model.totalStations} stations match
+                    {model.totalInvestment && (
+                      <> • Investment: {formatRupiah(model.totalInvestment)}</>
+                    )}
                   </p>
                 </div>
 
@@ -100,39 +174,151 @@ export function ModelDetailModal({
               </div>
             </DialogHeader>
 
-            {/* Content Tabs */}
-            <Tabs defaultValue="comparison" className="flex-1 flex flex-col">
-              <TabsList className="mx-6 mt-4 bg-slate-100 dark:bg-slate-800/50">
-                <TabsTrigger value="comparison" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">
-                  Perbandingan Station
-                </TabsTrigger>
-                <TabsTrigger value="investment" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">
-                  Investment Summary
-                </TabsTrigger>
-              </TabsList>
+            {/* Content with Board Type Tabs */}
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="flex-1 flex flex-col"
+            >
+              <div className="border-b border-slate-200 dark:border-slate-700 px-6 pt-2">
+                <TabsList className="bg-transparent h-auto p-0 gap-1 flex-wrap">
+                  {/* Overview Tab */}
+                  <TabsTrigger
+                    value="overview"
+                    className="data-[state=active]:bg-blue-600 data-[state=active]:text-white rounded-t-lg rounded-b-none border-b-2 border-transparent data-[state=active]:border-blue-600 flex items-center gap-2 px-4 py-2"
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                    Overview
+                  </TabsTrigger>
+
+                  {/* Board Type Tabs (if available) */}
+                  {hasBoards &&
+                    model.boards!.map((board) => {
+                      const Icon = BOARD_ICONS[board.boardType] || BOARD_ICONS.default;
+                      return (
+                        <TabsTrigger
+                          key={board.id}
+                          value={board.id}
+                          className="data-[state=active]:bg-blue-600 data-[state=active]:text-white rounded-t-lg rounded-b-none border-b-2 border-transparent data-[state=active]:border-blue-600 flex items-center gap-2 px-4 py-2"
+                        >
+                          <Icon className="h-4 w-4" />
+                          <span className="hidden sm:inline">{board.boardType}</span>
+                          <span className="sm:hidden">{board.boardType.split(" ")[0]}</span>
+                          {board.emmcSize && board.emmcSize !== "0GB" && (
+                            <span className="text-xs opacity-70 hidden md:inline">
+                              ({board.ramSize}/{board.emmcSize})
+                            </span>
+                          )}
+                        </TabsTrigger>
+                      );
+                    })}
+                </TabsList>
+              </div>
 
               <ScrollArea className="flex-1 px-6 py-4">
-                <TabsContent value="comparison" className="mt-0">
-                  <ComparisonTable
-                    queryStations={queryStations}
-                    modelStations={generateModelStations(model)}
+                {/* Overview Tab Content */}
+                <TabsContent value="overview" className="mt-0 space-y-6">
+                  {/* Investment Summary */}
+                  <InvestmentSummary
+                    model={model}
+                    showBoardBreakdown={hasBoards}
                   />
+
+                  {/* Station Comparison */}
+                  <div className="space-y-2">
+                    <h3 className="font-semibold text-slate-800 dark:text-white">
+                      Station Comparison
+                    </h3>
+                    <ComparisonTable
+                      queryStations={queryStations}
+                      modelStations={getModelStations()}
+                    />
+                  </div>
                 </TabsContent>
 
-                <TabsContent value="investment" className="mt-0">
-                  <InvestmentSummary model={model} />
-                </TabsContent>
+                {/* Individual Board Tab Contents */}
+                {hasBoards &&
+                  model.boards!.map((board) => (
+                    <TabsContent key={board.id} value={board.id} className="mt-0 space-y-6">
+                      {/* Board Info Card */}
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 rounded-xl bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700"
+                      >
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <h3 className="text-lg font-semibold text-slate-800 dark:text-white">
+                              {board.boardType}
+                            </h3>
+                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                              Model: {board.code}
+                            </p>
+                          </div>
+                          {board.emmcSize && board.emmcSize !== "0GB" && (
+                            <div className="text-right">
+                              <p className="text-sm text-slate-500 dark:text-slate-400">
+                                Variant
+                              </p>
+                              <p className="text-lg font-semibold text-slate-800 dark:text-white">
+                                {board.ramSize} / {board.emmcSize}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Board Stats */}
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="text-center p-3 rounded-lg bg-white dark:bg-slate-900">
+                            <p className="text-2xl font-bold text-slate-800 dark:text-white">
+                              {board.stationCount}
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Stations
+                            </p>
+                          </div>
+                          <div className="text-center p-3 rounded-lg bg-white dark:bg-slate-900">
+                            <p className="text-2xl font-bold text-slate-800 dark:text-white">
+                              {board.manpower}
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Manpower
+                            </p>
+                          </div>
+                          <div className="text-center p-3 rounded-lg bg-white dark:bg-slate-900">
+                            <p className="text-lg font-bold text-slate-800 dark:text-white">
+                              {formatRupiah(board.investment).replace("IDR", "Rp")}
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Investment
+                            </p>
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Board Stations Table */}
+                      <BoardStationsTable boardId={board.id} boardType={board.boardType} />
+                    </TabsContent>
+                  ))}
               </ScrollArea>
             </Tabs>
 
             {/* Footer Actions */}
             <div className="flex items-center justify-between px-6 py-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" className="border-slate-300 dark:border-slate-600">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-slate-300 dark:border-slate-600"
+                >
                   <FileText className="h-4 w-4 mr-2" />
                   Export PDF
                 </Button>
-                <Button variant="outline" size="sm" className="border-slate-300 dark:border-slate-600">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-slate-300 dark:border-slate-600"
+                >
                   <FileSpreadsheet className="h-4 w-4 mr-2" />
                   Export Excel
                 </Button>
@@ -150,15 +336,4 @@ export function ModelDetailModal({
       </DialogContent>
     </Dialog>
   );
-}
-
-// Helper function to generate model stations for comparison
-function generateModelStations(model: SimilarModel): string[] {
-  // This would come from the API in real implementation
-  // For now, mock based on stationCount
-  const commonStations = [
-    "MBT", "CAL1", "CAL2", "RFT", "WIFIBT",
-    "4G_INSTRUMENT", "MAINBOARD_MMI", "VISUAL", "PACKING"
-  ];
-  return commonStations.slice(0, model.stationCount);
 }
