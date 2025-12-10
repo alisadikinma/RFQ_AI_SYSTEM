@@ -16,7 +16,7 @@ function splitByHeaders(content: string): Array<{ title: string | null; content:
   
   // Match ## and ### headers
   const headerRegex = /^(#{2,3})\s+(.+)$/gm;
-  const matches = [...content.matchAll(headerRegex)];
+  const matches = Array.from(content.matchAll(headerRegex));
   
   if (matches.length === 0) {
     // No headers, return whole content

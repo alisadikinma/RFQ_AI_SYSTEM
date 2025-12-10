@@ -142,7 +142,7 @@ export async function getModelGroupsList(
     totalStations: group.total_stations || 0,
     totalManpower: group.total_manpower || 0,
     totalInvestment: group.total_investment || 0,
-    boardTypes: [...new Set((group.models || []).map((m: any) => m.board_type).filter(Boolean))],
+    boardTypes: Array.from(new Set((group.models || []).map((m: any) => m.board_type).filter(Boolean))),
   }));
 
   const total = count || 0;

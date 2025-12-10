@@ -4,6 +4,7 @@
  */
 
 import { AGENT_TOOLS, executeTool } from './tools';
+import { createClient } from '@supabase/supabase-js';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'google/gemini-2.0-flash-001';
@@ -16,67 +17,277 @@ function getApiKey(): string {
   return key;
 }
 
+// ============================================
+// Station Code Cache (fetched from database)
+// ============================================
+interface StationCache {
+  codes: Set<string>;
+  aliases: Map<string, string>; // alias -> master code
+  lastFetch: number;
+}
+
+let stationCache: StationCache | null = null;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fetch valid station codes from database (with caching)
+ */
+async function getValidStationCodes(): Promise<StationCache> {
+  // Return cached if still valid
+  if (stationCache && (Date.now() - stationCache.lastFetch) < CACHE_TTL_MS) {
+    return stationCache;
+  }
+  
+  console.log('🔄 Refreshing station codes cache from database...');
+  
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('Supabase not configured, using empty cache');
+    return { codes: new Set(), aliases: new Map(), lastFetch: Date.now() };
+  }
+  
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  
+  try {
+    // Fetch master station codes
+    const { data: stations } = await supabase
+      .from('station_master')
+      .select('code');
+    
+    // Fetch aliases
+    const { data: aliases } = await supabase
+      .from('station_aliases')
+      .select('alias_name, station_master(code)');
+    
+    const codes = new Set<string>();
+    const aliasMap = new Map<string, string>();
+    
+    // Add master codes
+    for (const s of stations || []) {
+      if (s.code) codes.add(s.code.toUpperCase());
+    }
+    
+    // Add aliases
+    for (const a of aliases || []) {
+      const aliasName = a.alias_name?.toUpperCase();
+      const masterCode = (a.station_master as any)?.code?.toUpperCase();
+      if (aliasName && masterCode) {
+        codes.add(aliasName);
+        aliasMap.set(aliasName, masterCode);
+      }
+    }
+    
+    console.log(`✅ Cached ${codes.size} station codes, ${aliasMap.size} aliases`);
+    
+    stationCache = { codes, aliases: aliasMap, lastFetch: Date.now() };
+    return stationCache;
+  } catch (error) {
+    console.error('Failed to fetch station codes:', error);
+    return { codes: new Set(), aliases: new Map(), lastFetch: Date.now() };
+  }
+}
+
+// Common words blacklist (language words, fine to hardcode)
+const COMMON_WORDS_BLACKLIST = new Set([
+  // Indonesian
+  'INI', 'ITU', 'DAN', 'ATAU', 'YANG', 'DARI', 'UNTUK', 'DENGAN',
+  'ADA', 'BISA', 'AKAN', 'JIKA', 'JADI', 'JUGA', 'SAYA', 'ANDA',
+  'TIDAK', 'SUDAH', 'BELUM', 'HARUS', 'BARU', 'LAMA', 'SEMUA',
+  // English
+  'THE', 'AND', 'FOR', 'WITH', 'THIS', 'THAT', 'FROM', 'HAVE',
+  'WILL', 'CAN', 'ARE', 'WAS', 'WERE', 'BEEN', 'BEING', 'HAS',
+  // Industry terms (not stations)
+  'EMS', 'PCB', 'PCBA', 'BOM', 'RFQ', 'OEM', 'ODM', 'NPI', 'MP',
+  'MODEL', 'CUSTOMER', 'STATION', 'TEST', 'LINE', 'PROCESS',
+  'TOTAL', 'COUNT', 'LIST', 'DATA', 'INFO', 'RESULT', 'MATCH',
+]);
+
 /**
  * System prompt for the RFQ AI Agent
  */
-const SYSTEM_PROMPT = `You are an expert RFQ (Request for Quotation) assistant for an Electronics Manufacturing Services (EMS) company in Batam, Indonesia.
+const SYSTEM_PROMPT = `You are an expert RFQ (Request for Quotation) assistant for PT SATNUSA PERSADA, an Electronics Manufacturing Services (EMS) company in Batam, Indonesia.
 
-## Your Capabilities:
-1. Extract station lists from images/screenshots
-2. Find similar historical models based on stations
-3. Search the EMS knowledge base for technical information
-4. Provide detailed model comparisons
+## 🌐 Language Support (CRITICAL - MUST FOLLOW!):
 
-## Available Tools:
-- search_knowledge: Search EMS technical documentation
-- find_similar_models: Find historical models matching station list (USE THIS after extracting stations!)
-- get_model_details: Get detailed info about a specific model
-- get_customer_stations: Get stations used by a customer historically
-- get_station_details: Get details about a specific station
-- list_available_stations: List all available test stations
+**RULE: ALWAYS respond in the SAME language as the user's message!**
 
-## CRITICAL WORKFLOW - Follow this exactly:
+| User's Language | Your Response Language |
+|-----------------|------------------------|
+| Bahasa Indonesia | Bahasa Indonesia |
+| English | English |
+| 中文/Chinese/Mandarin | 中文 (Chinese) |
 
-### When user uploads an image:
-1. Extract ALL station names from the image
-2. IMMEDIATELY call find_similar_models with the extracted stations
-3. Present top 3-5 matches with similarity scores
-4. Ask if user wants to see detailed comparison
+**Examples:**
+- User: "Customer apa saja?" → Respond in **Indonesian**
+- User: "What customers exist?" → Respond in **English**
+- User: "有哪些客户？" → Respond in **中文**
+- User: "模型有哪些？" → Respond in **中文**
+- User: "RFT是什么？" → Respond in **中文**
 
-### When user provides station list (text):
-1. IMMEDIATELY call find_similar_models with those stations
-2. Present top 3-5 matches with similarity scores
+⚠️ **NEVER mix languages!** If user speaks Chinese, your ENTIRE response must be in Chinese.
 
-### Response Format for Similar Models:
-Present results in this format:
----
-📊 **Analisis Selesai!**
+## About SATNUSA:
+- PT SATNUSA PERSADA is a leading EMS provider in Batam, Indonesia
+- Specializes in PCBA manufacturing, testing, and assembly
+- Serves major customers including XIAOMI, TCL, HUAWEI, and other OEM brands
 
-Ditemukan X model serupa berdasarkan Y station yang diekstrak:
+## 🛠️ Available Tools:
 
-**🥇 Model 1: [MODEL_CODE]** - Customer: [CUSTOMER]
-   - Similarity: XX%
-   - Total Stations: N | Total MP: M
-   - ✅ Match: [stations]
-   - ❌ Missing: [stations]
+### 1. query_database (MOST POWERFUL - use for ANY database question)
+Use this for questions about data in our system:
+- "Customer apa saja yang ada?" → query_type: list_customers
+- "Station/machine apa saja?" → query_type: list_stations  
+- "Model apa saja dari XIAOMI?" → query_type: models_by_customer, customer: "XIAOMI"
+- "Model dengan manpower terbanyak?" → query_type: models_by_manpower
+- "Model yang pakai RFT + CAL + MMI?" → query_type: models_by_stations, stations: ["RFT", "CAL", "MMI"]
+- "Statistik customer" → query_type: customer_stats
+- "Station yang paling sering dipakai?" → query_type: station_usage_stats
 
-**🥈 Model 2: [MODEL_CODE]** - Customer: [CUSTOMER]
-   ...
+### 2. web_search (for internet information)
+Use for company info, products, news, general knowledge NOT in database
 
-Klik model untuk melihat detail comparison.
----
+### 3. search_knowledge (for EMS technical documentation)  
+Use for SMT processes, testing methods, IPC standards, manufacturing best practices
 
-## Response Guidelines:
-1. Always respond in Bahasa Indonesia
-2. After extracting stations from image, ALWAYS run find_similar_models immediately
-3. Show top 3-5 models with scores > 50%
-4. Include similarity percentage, matched/missing stations
-5. Be proactive - don't wait for user to ask for analysis
+### 4. find_similar_models (for station matching)
+Use when user uploads station list image or provides list of stations
 
-## Important:
-- NEVER stop after extracting stations - always continue to find similar models
-- Use tools to get REAL data from database
-- If no similar models found, suggest similar products or explain why`;
+### 5. get_model_details / get_station_details
+Use for detailed info about specific model or station
+
+## 📋 WHEN TO USE WHICH TOOL:
+
+| User Question | Tool to Use | Parameters |
+|--------------|-------------|-----------|
+| "Customer apa saja?" | query_database | query_type: list_customers |
+| "Station/machine apa?" | query_database | query_type: list_stations |
+| "Model XIAOMI apa saja?" | query_database | query_type: models_by_customer |
+| "Model dengan station RFT+CAL" | query_database | query_type: models_by_stations |
+| "Model investasi terbesar?" | query_database | query_type: models_by_investment |
+| "Apa itu SATNUSA?" | web_search | query: "PT SATNUSA PERSADA" |
+| "Apa itu SMT?" | search_knowledge | query: "SMT process" |
+| [uploads image] | find_similar_models | stations: [extracted] |
+
+## 🎨 RESPONSE FORMATTING (use Markdown!):
+
+### For Database Results - Use Tables:
+Example:
+| No | Customer | Total Models |
+|----|----------|-------------|
+| 1  | XIAOMI   | 150         |
+| 2  | TCL      | 120         |
+
+### For Station Explanations:
+**MBT (Manual Bench Test)**
+- 📋 Fungsi: Rework dan troubleshooting manual
+- ⏱️ Cycle Time: 5-30 menit  
+- 👷 Manpower: 1 operator/station
+
+### For Similar Models:
+## 📊 Hasil Pencarian
+
+Ditemukan **X model** yang cocok:
+
+| Rank | Model | Customer | Similarity | Manpower |
+|------|-------|----------|------------|----------|
+| 🥇 | ABC-001 | XIAOMI | 95% | 12 |
+| 🥈 | XYZ-002 | TCL | 88% | 10 |
+
+### For Lists:
+## 📋 Daftar Customer
+
+Total: **15 customer**
+
+| No | Code | Name | Country |
+|----|------|------|---------|
+| 1 | XMI | XIAOMI | China |
+| 2 | TCL | TCL | China |
+
+## ⚠️ CRITICAL RULES:
+
+1. **LANGUAGE MATCHING** - If user speaks Chinese (中文), respond 100% in Chinese. If Indonesian, respond in Indonesian. NEVER mix!
+2. **ALWAYS USE TOOLS** - Never guess or make up data
+3. **USE query_database** for ANY question about customers, models, stations, statistics
+4. **FORMAT BEAUTIFULLY** - Use tables, bold, emoji for readability
+5. **BE HELPFUL** - If one tool fails, try another approach
+6. For station explanations: Include fungsi/功能, cycle time/周期时间, manpower/人力
+
+## 📝 Example Responses:
+
+### Example 1: "Customer apa saja?"
+[Call query_database with query_type: list_customers]
+
+## 📋 Daftar Customer SATNUSA
+
+Total: **15 customer** terdaftar
+
+| No | Kode | Nama | Negara |
+|----|------|------|---------|
+| 1 | XMI | XIAOMI | 🇨🇳 China |
+| 2 | TCL | TCL | 🇨🇳 China |
+| 3 | HW | HUAWEI | 🇨🇳 China |
+...
+
+### Example 2: "Jelaskan fungsi station RFT"
+[Call get_station_details]
+
+## 📡 RFT (Radio Frequency Test)
+
+**Kategori:** Testing
+
+### Fungsi Utama:
+Validasi performa RF termasuk transmit power, receive sensitivity, dan frequency accuracy.
+
+### Spesifikasi:
+| Parameter | Nilai |
+|-----------|-------|
+| ⏱️ Cycle Time | 30-180 detik |
+| 👷 Manpower | 1 operator |
+| 🎯 Test Coverage | 2G/3G/4G/5G/WiFi/BT |
+
+### Example 3: "模型有哪些使用RFT站？" (Chinese)
+[Call query_database with query_type: models_by_stations]
+
+## 📊 使用RFT站的模型
+
+找到 **X个模型** 使用RFT测试站：
+
+| 排名 | 型号 | 客户 | 站点数 |
+|-----|------|------|-------|
+| 1 | ABC-001 | 小米 | 8 |
+...
+
+### Example 4: "有哪些客户？" (Chinese - Customer list)
+[Call query_database with query_type: list_customers]
+
+## 📋 客户列表
+
+共有 **15个客户**
+
+| 序号 | 代码 | 名称 | 国家 |
+|------|------|------|------|
+| 1 | XMI | 小米 | 🇨🇳 中国 |
+| 2 | TCL | TCL | 🇨🇳 中国 |
+| 3 | HW | 华为 | 🇨🇳 中国 |
+
+### Example 5: "RFT是什么？" (Chinese - Station explanation)
+[Call get_station_details]
+
+## 📡 RFT (射频测试)
+
+**类别:** 测试
+
+### 主要功能：
+验证射频性能，包括发射功率、接收灵敏度和频率精度。
+
+### 规格：
+| 参数 | 值 |
+|------|------|
+| ⏱️ 周期时间 | 30-180秒 |
+| 👷 人力 | 1人 |
+| 🎯 测试范围 | 2G/3G/4G/5G/WiFi/BT |`;
 
 export interface AgentMessage {
   role: 'user' | 'assistant' | 'function' | 'tool';
@@ -195,6 +406,10 @@ async function callOpenRouterWithTools(
       max_tokens: 4096,
     };
     
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: {
@@ -204,7 +419,10 @@ async function callOpenRouterWithTools(
         'X-Title': 'RFQ AI System',
       },
       body: JSON.stringify(requestBody),
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       const error = await response.text();
@@ -238,7 +456,6 @@ async function callOpenRouterWithTools(
         
         const result = await executeTool(name, args);
         
-        // Store tool results for later use
         toolResults[name] = result;
         
         console.log(`📦 Tool result (${name}):`, JSON.stringify(result).slice(0, 500));
@@ -276,41 +493,63 @@ async function callOpenRouterWithTools(
   };
 }
 
-function extractStationsFromResponse(content: string): AgentResponse['stations'] {
-  const stations: AgentResponse['stations'] = [];
-  const patterns = [
-    /[✅✓•\*\-\d.]\s*\*?\*?([A-Z][A-Z0-9_]{1,25})\*?\*?\s*[-–:]?\s*(.*)/gi,
-    /\*\*([A-Z][A-Z0-9_]{1,25})\*\*/gi,
-    /^([A-Z][A-Z0-9_]{1,25})$/gm,
-  ];
+/**
+ * Extract stations from response - Database-driven validation
+ * Returns undefined for general Q&A to avoid false positives
+ */
+async function extractStationsFromResponse(
+  content: string,
+  hasImage: boolean,
+  toolsUsed: string[]
+): Promise<AgentResponse['stations']> {
+  // Only extract stations if context is relevant
+  const hasStationContext = 
+    hasImage ||
+    toolsUsed.includes('find_similar_models') ||
+    toolsUsed.includes('get_station_details') ||
+    /station[s]?\s*(list|:)|daftar\s*station|extracted\s*station/i.test(content);
   
+  if (!hasStationContext) {
+    return undefined;
+  }
+  
+  // Get valid codes from database (cached)
+  const { codes: validCodes, aliases } = await getValidStationCodes();
+  
+  // If no valid codes loaded, skip extraction
+  if (validCodes.size === 0) {
+    console.warn('No station codes in cache, skipping extraction');
+    return undefined;
+  }
+  
+  const stations: AgentResponse['stations'] = [];
   const stationCodes = new Set<string>();
-  const knownCodes = [
-    'RFT', 'CAL', 'MMI', 'MBT', 'VISUAL', 'OS_DOWNLOAD', 'CURRENT_TESTING',
-    'ICT', 'FCT', 'AOI', 'UNDERFILL', 'T_GREASE', 'SHIELDING', 'CAMERA',
-    'NFC', 'FINGERPRINT', 'WIRELESS_CHARGING', 'ROUTER', 'DEPANEL',
-    'PCB_CURRENT', 'AXI', 'SPI', 'COATING', 'POTTING', 'BURN_IN',
-    'SMT', 'REFLOW', 'WAVE', 'SELECTIVE', 'THT', 'PTH', 'ASSEMBLY',
-    'PACKING', 'LABELING', 'OQC', 'FQC', 'IQC', 'PROGRAMMING', 'WIFIBT',
-    'CAL1', 'CAL2', 'RFT1', 'RFT2', '4G', '5G',
+  
+  // Pattern: Look for station codes in list format
+  const patterns = [
+    /[✅✓•\-\d.)]\s*\*?\*?([A-Z][A-Z0-9_]{2,20})\*?\*?/g,
+    /\|\s*([A-Z][A-Z0-9_]{2,20})\s*\|/g,
   ];
   
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(content)) !== null) {
       const code = match[1].toUpperCase();
-      const reason = match[2]?.trim() || '';
       
-      const isKnown = knownCodes.some(k => code.includes(k) || k.includes(code));
-      const isValidCode = /^[A-Z][A-Z0-9_]{1,25}$/.test(code);
+      // Skip common words
+      if (COMMON_WORDS_BLACKLIST.has(code)) continue;
       
-      if ((isKnown || isValidCode) && !stationCodes.has(code) && code.length <= 25) {
-        stationCodes.add(code);
+      // Check if valid station code (from database)
+      if (validCodes.has(code) && !stationCodes.has(code)) {
+        // Resolve alias to master code if needed
+        const masterCode = aliases.get(code) || code;
+        
+        stationCodes.add(masterCode);
         stations.push({
-          code,
-          name: code.replace(/_/g, ' '),
-          reason: reason.slice(0, 100),
-          confidence: isKnown ? 'high' : 'medium',
+          code: masterCode,
+          name: masterCode.replace(/_/g, ' '),
+          reason: aliases.has(code) ? `Matched via alias: ${code}` : '',
+          confidence: 'high',
         });
       }
     }
@@ -355,8 +594,9 @@ export async function processAgentMessage(
     
     console.log('📝 Agent response:', content.slice(0, 200));
     
-    // Extract stations from response
-    const stations = extractStationsFromResponse(content);
+    // Extract stations from response (database-validated)
+    const hasImage = !!context?.image;
+    const stations = await extractStationsFromResponse(content, hasImage, toolsUsed);
     
     // Extract similar models from tool results
     let similarModels: SimilarModel[] | undefined;
@@ -390,8 +630,17 @@ export async function processAgentMessage(
   } catch (error) {
     console.error('Agent error:', error);
     
+    let errorMsg = 'Unknown error';
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        errorMsg = 'Request timeout - server sibuk. Silakan coba lagi.';
+      } else {
+        errorMsg = error.message;
+      }
+    }
+    
     return {
-      content: `Maaf, terjadi kesalahan: ${error instanceof Error ? error.message : 'Unknown error'}. Silakan coba lagi.`,
+      content: `Maaf, terjadi kesalahan: ${errorMsg}`,
     };
   }
 }

@@ -6,14 +6,14 @@ import { usePathname } from 'next/navigation';
 import {
   Home,
   Settings,
-  FileText,
-  Plus,
   Package,
   ChevronLeft,
   Factory
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { sidebarVariants } from '@/lib/animations';
+import { ChatHistorySection } from '@/components/rfq/chat-v2/ChatHistorySection';
+import { NewChatButton } from '@/components/rfq/chat-v2/NewChatButton';
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -24,11 +24,6 @@ const menuItems = [
   { icon: Home, label: 'Dashboard', href: '/dashboard' },
   { icon: Factory, label: 'Machines', href: '/machines' },
   { icon: Package, label: 'Models', href: '/models' },
-];
-
-const rfqItems = [
-  { icon: Plus, label: 'New RFQ', href: '/rfq/new', highlight: true },
-  { icon: FileText, label: 'RFQ History', href: '/rfq' },
 ];
 
 const bottomItems = [
@@ -93,33 +88,15 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
 
         <div className="my-4 border-t border-slate-200 dark:border-slate-800" />
 
-        <nav className="space-y-1">
-          {rfqItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href;
-
-            return (
-              <Link key={item.href} href={item.href}>
-                <motion.div
-                  whileHover={{ x: 4 }}
-                  whileTap={{ scale: 0.98 }}
-                  className={cn(
-                    'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors',
-                    item.highlight && 'bg-primary-600 text-white hover:bg-primary-700',
-                    !item.highlight && isActive
-                      ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 border-l-4 border-primary-600'
-                      : !item.highlight && 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  )}
-                >
-                  <Icon className="w-5 h-5 flex-shrink-0" />
-                  {!isCollapsed && (
-                    <span className="font-medium text-sm">{item.label}</span>
-                  )}
-                </motion.div>
-              </Link>
-            );
-          })}
-        </nav>
+        {/* Chat Section */}
+        {!isCollapsed && (
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="px-3 mb-2">
+              <NewChatButton />
+            </div>
+            <ChatHistorySection />
+          </div>
+        )}
       </div>
 
       <div className="p-3 border-t border-slate-200 dark:border-slate-800">

@@ -138,7 +138,7 @@ export function ModelComparisonModal({
       };
     }).sort((a, b) => {
       // Sort: match first, then missing, then extra
-      const order = { match: 0, missing: 1, extra: 2 };
+      const order: Record<string, number> = { match: 0, missing: 1, extra: 2 };
       return order[a.status] - order[b.status];
     });
   })();
