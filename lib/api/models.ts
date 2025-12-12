@@ -110,26 +110,46 @@ export const getModelsList = async (
     };
   }
 
-  // Get stations with machine data for aggregation
-  const { data: stationsData } = await supabase
+  // ✅ FIX: Get stations with explicit join using machine_id
+  const { data: stationsData, error: stationsError } = await supabase
     .from('model_stations')
     .select(`
       model_id,
       manpower,
-      machine:station_master(typical_uph)
+      machine_id
     `)
     .in('model_id', modelIds);
+
+  if (stationsError) {
+    console.error('Error fetching stations:', stationsError);
+  }
+
+  // ✅ FIX: Get UPH data separately if we have station data
+  const machineIds = [...new Set(stationsData?.map(s => s.machine_id).filter(Boolean) || [])];
+  
+  let machineUphMap = new Map<string, number>();
+  
+  if (machineIds.length > 0) {
+    const { data: machinesData } = await supabase
+      .from('station_master')
+      .select('id, typical_uph')
+      .in('id', machineIds);
+    
+    machinesData?.forEach(m => {
+      machineUphMap.set(m.id, m.typical_uph || 0);
+    });
+  }
 
   // Aggregate per model
   const aggregates = new Map<string, { count: number; manpower: number; minUph: number }>();
   
   stationsData?.forEach(s => {
     const existing = aggregates.get(s.model_id) || { count: 0, manpower: 0, minUph: Infinity };
-    const machineUph = (s.machine as any)?.typical_uph || Infinity;
+    const machineUph = machineUphMap.get(s.machine_id) || Infinity;
     
     aggregates.set(s.model_id, {
       count: existing.count + 1,
-      manpower: existing.manpower + (s.manpower || 0),
+      manpower: existing.manpower + (Number(s.manpower) || 0),
       minUph: Math.min(existing.minUph, machineUph),
     });
   });

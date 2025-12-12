@@ -1,19 +1,23 @@
 'use client';
 
+import { useTransition } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   Home,
   Settings,
   Package,
   ChevronLeft,
-  Factory
+  Factory,
+  Loader2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { sidebarVariants } from '@/lib/animations';
 import { ChatHistorySection } from '@/components/rfq/chat-v2/ChatHistorySection';
 import { NewChatButton } from '@/components/rfq/chat-v2/NewChatButton';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/hooks/use-queries';
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -21,9 +25,9 @@ interface SidebarProps {
 }
 
 const menuItems = [
-  { icon: Home, label: 'Dashboard', href: '/dashboard' },
-  { icon: Factory, label: 'Machines', href: '/machines' },
-  { icon: Package, label: 'Models', href: '/models' },
+  { icon: Home, label: 'Dashboard', href: '/dashboard', prefetchKey: 'dashboard' },
+  { icon: Factory, label: 'Machines', href: '/machines', prefetchKey: 'stations' },
+  { icon: Package, label: 'Models', href: '/models', prefetchKey: 'models' },
 ];
 
 const bottomItems = [
@@ -32,6 +36,46 @@ const bottomItems = [
 
 export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [isPending, startTransition] = useTransition();
+
+  // ✅ Prefetch data saat hover - navigasi jadi instant!
+  const handlePrefetch = (prefetchKey?: string) => {
+    if (!prefetchKey) return;
+    
+    switch (prefetchKey) {
+      case 'dashboard':
+        queryClient.prefetchQuery({
+          queryKey: ['dashboard', 'full'],
+          staleTime: 2 * 60 * 1000,
+        });
+        break;
+      case 'models':
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.modelsList({ page: 1 }),
+          staleTime: 2 * 60 * 1000,
+        });
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.customerOptions,
+          staleTime: 10 * 60 * 1000,
+        });
+        break;
+      case 'stations':
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.stations,
+          staleTime: 30 * 60 * 1000,
+        });
+        break;
+    }
+  };
+
+  // ✅ Navigate dengan transition untuk show loading state
+  const handleNavigate = (href: string) => {
+    startTransition(() => {
+      router.push(href);
+    });
+  };
 
   return (
     <motion.aside
@@ -41,8 +85,13 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
     >
       <div className="p-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
-            <Factory className="w-6 h-6 text-white" />
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center relative">
+            {/* ✅ Loading spinner saat navigasi */}
+            {isPending ? (
+              <Loader2 className="w-6 h-6 text-white animate-spin" />
+            ) : (
+              <Factory className="w-6 h-6 text-white" />
+            )}
           </div>
           {!isCollapsed && (
             <motion.div
@@ -52,7 +101,9 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
               className="flex flex-col"
             >
               <span className="font-bold text-slate-900 dark:text-white">RFQ AI</span>
-              <span className="text-xs text-slate-500 dark:text-slate-400">System</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                {isPending ? 'Loading...' : 'System'}
+              </span>
             </motion.div>
           )}
         </div>
@@ -65,23 +116,24 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
             const isActive = pathname === item.href;
 
             return (
-              <Link key={item.href} href={item.href}>
-                <motion.div
-                  whileHover={{ x: 4 }}
-                  whileTap={{ scale: 0.98 }}
-                  className={cn(
-                    'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors',
-                    isActive
-                      ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 border-l-4 border-primary-600'
-                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  )}
-                >
-                  <Icon className="w-5 h-5 flex-shrink-0" />
-                  {!isCollapsed && (
-                    <span className="font-medium text-sm">{item.label}</span>
-                  )}
-                </motion.div>
-              </Link>
+              <motion.div
+                key={item.href}
+                whileHover={{ x: 4 }}
+                whileTap={{ scale: 0.98 }}
+                onMouseEnter={() => handlePrefetch(item.prefetchKey)}
+                onClick={() => handleNavigate(item.href)}
+                className={cn(
+                  'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors cursor-pointer',
+                  isActive
+                    ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 border-l-4 border-primary-600'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                )}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                {!isCollapsed && (
+                  <span className="font-medium text-sm">{item.label}</span>
+                )}
+              </motion.div>
             );
           })}
         </nav>

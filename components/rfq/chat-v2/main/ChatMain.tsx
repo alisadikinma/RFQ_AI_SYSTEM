@@ -177,7 +177,15 @@ export function ChatMain({ chatId }: ChatMainProps) {
 
       const data = await response.json();
       
-      console.log('📥 API Response:', { success: data.success, hasContent: !!data.content });
+      console.log('📥 API Response:', { 
+        success: data.success, 
+        hasContent: !!data.content,
+        contentPreview: data.content?.slice(0, 300),
+        hasSimilarModels: !!data.similarModels?.length,
+        similarModelsCount: data.similarModels?.length,
+        toolsUsed: data.toolsUsed,
+        error: data.error 
+      });
 
       if (!data.success) {
         throw new Error(data.error || 'API request failed');
@@ -212,6 +220,12 @@ export function ChatMain({ chatId }: ChatMainProps) {
       }
 
       // Save assistant response to database
+      console.log('💾 Saving assistant response:', { 
+        contentLength: data.content?.length,
+        hasStations: !!extractedStations?.length,
+        hasModels: !!similarModels?.length 
+      });
+
       const assistantResponse = await addMessage(sessionId, {
         role: "assistant",
         content: data.content,
@@ -219,8 +233,22 @@ export function ChatMain({ chatId }: ChatMainProps) {
         similarModels,
       });
 
+      console.log('💾 addMessage result:', { success: !!assistantResponse, id: assistantResponse?.id });
+
       if (assistantResponse) {
         setMessages(prev => [...prev, assistantResponse]);
+      } else {
+        // Fallback: show message even if DB save failed
+        console.warn('⚠️ DB save failed, showing message anyway');
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          role: "assistant" as const,
+          content: data.content,
+          timestamp: new Date(),
+          sequence: prev.length + 1,
+          extractedStations,
+          similarModels,
+        }]);
       }
     } catch (error) {
       console.error("Error processing message:", error);
@@ -298,8 +326,8 @@ export function ChatMain({ chatId }: ChatMainProps) {
   };
 
   const handleSelectModel = (model: SimilarModel) => {
-    setSelectedModel(model);
-    setShowModelModal(true);
+    // Open model detail page in new tab
+    window.open(`/models/${model.id}`, '_blank');
   };
 
   const handleUseModel = (model: SimilarModel) => {

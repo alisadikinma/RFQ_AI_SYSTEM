@@ -96,7 +96,7 @@ export function ModelCard({ model, rank, index, onClick }: ModelCardProps) {
 
       {/* Score Ring */}
       <div className="flex justify-center mb-4">
-        <ScoreRing score={Math.round(model.similarity * 100)} size="md" />
+        <ScoreRing score={Math.round(model.similarity)} size="md" />
       </div>
 
       {/* Model Info */}

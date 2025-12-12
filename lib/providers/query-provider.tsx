@@ -9,16 +9,14 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // Data dianggap fresh selama 5 menit
+            // Cache data for 5 minutes
             staleTime: 5 * 60 * 1000,
-            // Cache disimpan selama 30 menit
+            // Keep unused data in cache for 30 minutes
             gcTime: 30 * 60 * 1000,
-            // Jangan refetch saat window focus (mengurangi API calls)
-            refetchOnWindowFocus: false,
-            // Retry 1x jika error
+            // Retry failed requests once
             retry: 1,
-            // Jangan refetch saat reconnect
-            refetchOnReconnect: false,
+            // Don't refetch on window focus (less annoying)
+            refetchOnWindowFocus: false,
           },
         },
       })

@@ -42,6 +42,15 @@ function calcInvestment(mp: number): number {
   return mp * MONTHLY_WAGE_IDR * INVESTMENT_FACTOR;
 }
 
+// ✅ Format manpower (show decimal only if needed)
+function formatMP(mp: number): string {
+  if (mp === Math.floor(mp)) {
+    return mp.toString(); // Integer: "1", "2"
+  }
+  // Remove trailing zeros: 0.50 → "0.5", 0.25 → "0.25"
+  return mp.toFixed(2).replace(/\.?0+$/, '');
+}
+
 export default function ModelDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -126,20 +135,28 @@ export default function ModelDetailPage() {
   const uph = bottleneck?.machine.typical_uph || 0;
   const totalInvestment = calcInvestment(totalMP);
 
-  // Group stations by board type
+  // ✅ Group stations by board type with calculated stats
   const stationsByBoardType = model.board_types.reduce((acc, boardType) => {
-    acc[boardType] = model.stations
+    const stations = model.stations
       .filter(s => s.board_type === boardType)
       .sort((a, b) => a.sequence - b.sequence);
+    
+    const boardMP = stations.reduce((sum, s) => sum + s.manpower, 0);
+    const boardInvestment = calcInvestment(boardMP);
+    
+    acc[boardType] = {
+      stations,
+      totalMP: boardMP,
+      totalInvestment: boardInvestment,
+    };
     return acc;
-  }, {} as Record<string, typeof model.stations>);
+  }, {} as Record<string, { stations: typeof model.stations; totalMP: number; totalInvestment: number }>);
 
-  // Get active tab stations
-  const activeStations = activeTab ? stationsByBoardType[activeTab] || [] : [];
-  
-  // ✅ Calculate totals for active tab
-  const activeTabTotalMP = activeStations.reduce((sum, s) => sum + s.manpower, 0);
-  const activeTabTotalInvestment = calcInvestment(activeTabTotalMP);
+  // Get active tab data
+  const activeTabData = activeTab ? stationsByBoardType[activeTab] : null;
+  const activeStations = activeTabData?.stations || [];
+  const activeTabTotalMP = activeTabData?.totalMP || 0;
+  const activeTabTotalInvestment = activeTabData?.totalInvestment || 0;
 
   return (
     <PageTransition>
@@ -230,12 +247,32 @@ export default function ModelDetailPage() {
             value={stationCount}
             icon={Factory}
           />
-          <StatsCard
-            title="Total Manpower"
-            value={totalMP}
-            icon={Users}
-          />
-          {/* Total Investment Card */}
+          {/* ✅ Total MP Card with formatted decimal */}
+          <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center flex-shrink-0">
+                <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                  Total Manpower
+                </p>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white truncate">
+                  {formatMP(totalMP)}
+                </h3>
+                {/* ✅ Breakdown per board type */}
+                {model.board_types.length > 1 && (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {model.board_types.map(bt => {
+                      const data = stationsByBoardType[bt];
+                      return `${bt}: ${formatMP(data.totalMP)}`;
+                    }).join(' + ')}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          {/* ✅ Total Investment Card */}
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/20 flex items-center justify-center flex-shrink-0">
@@ -248,9 +285,15 @@ export default function ModelDetailPage() {
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white truncate">
                   {formatCurrency(totalInvestment)}
                 </h3>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  /month
-                </p>
+                {/* ✅ Breakdown per board type */}
+                {model.board_types.length > 1 && (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {model.board_types.map(bt => {
+                      const data = stationsByBoardType[bt];
+                      return `${bt}: ${formatCurrency(data.totalInvestment)}`;
+                    }).join(' + ')}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -286,11 +329,11 @@ export default function ModelDetailPage() {
             variants={itemVariants}
             className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden"
           >
-            {/* Horizontal Tabs */}
+            {/* ✅ Horizontal Tabs with MP and Investment per board type */}
             <div className="border-b border-slate-200 dark:border-slate-700">
               <div className="flex overflow-x-auto">
                 {model.board_types.map((boardType) => {
-                  const stations = stationsByBoardType[boardType] || [];
+                  const data = stationsByBoardType[boardType];
                   const isActive = activeTab === boardType;
                   
                   return (
@@ -305,18 +348,29 @@ export default function ModelDetailPage() {
                           : "text-slate-600 dark:text-slate-400"
                       )}
                     >
-                      <span className="flex items-center gap-2">
-                        {boardType}
-                        <Badge 
-                          variant="secondary" 
-                          className={cn(
-                            "text-xs px-1.5 py-0.5",
-                            isActive && "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400"
-                          )}
-                        >
-                          {stations.length}
-                        </Badge>
-                      </span>
+                      <div className="flex flex-col items-start gap-1">
+                        <span className="flex items-center gap-2">
+                          {boardType}
+                          <Badge 
+                            variant="secondary" 
+                            className={cn(
+                              "text-xs px-1.5 py-0.5",
+                              isActive && "bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400"
+                            )}
+                          >
+                            {data.stations.length}
+                          </Badge>
+                        </span>
+                        {/* ✅ MP and Investment per board type di tab */}
+                        <span className={cn(
+                          "text-xs",
+                          isActive 
+                            ? "text-slate-600 dark:text-slate-300" 
+                            : "text-slate-500 dark:text-slate-500"
+                        )}>
+                          MP: {formatMP(data.totalMP)} · {formatCurrency(data.totalInvestment)}
+                        </span>
+                      </div>
                       {isActive && (
                         <motion.div
                           layoutId="activeTab"
@@ -382,8 +436,9 @@ export default function ModelDetailPage() {
                               <TableCell className="text-slate-600 dark:text-slate-400">
                                 {station.machine.name}
                               </TableCell>
+                              {/* ✅ MP with decimal formatting */}
                               <TableCell className="text-center tabular-nums font-medium">
-                                {station.manpower}
+                                {formatMP(station.manpower)}
                               </TableCell>
                               <TableCell className="text-right tabular-nums text-green-600 dark:text-green-400 font-medium">
                                 {formatCurrency(stationInvestment)}
@@ -404,8 +459,9 @@ export default function ModelDetailPage() {
                           <TableCell colSpan={3} className="text-right">
                             Total
                           </TableCell>
+                          {/* ✅ Total MP with decimal formatting */}
                           <TableCell className="text-center tabular-nums">
-                            {activeTabTotalMP}
+                            {formatMP(activeTabTotalMP)}
                           </TableCell>
                           <TableCell className="text-right tabular-nums text-green-600 dark:text-green-400">
                             {formatCurrency(activeTabTotalInvestment)}

@@ -107,7 +107,31 @@ const COMMON_WORDS_BLACKLIST = new Set([
 /**
  * System prompt for the RFQ AI Agent
  */
-const SYSTEM_PROMPT = `You are an expert RFQ (Request for Quotation) assistant for PT SATNUSA PERSADA, an Electronics Manufacturing Services (EMS) company in Batam, Indonesia.
+const SYSTEM_PROMPT = `You are an expert RFQ (Request for Quotation) assistant for PT SATNUSA PERSADA (also known as "SN" or "SATNUSA"), an Electronics Manufacturing Services (EMS) company in Batam, Indonesia. SATNUSA is the company that owns and operates this RFQ AI Agent.
+
+## ⚡ RESPONSE STYLE (CRITICAL!):
+
+**BE CONCISE!** Skip unnecessary explanations. Go straight to the answer.
+
+### For Calculations (Manpower, Investment, Cost):
+- Show formula ONCE, then go straight to table
+- Use compact table format
+- End with **Total** and **Investment** summary
+- NO lengthy step-by-step explanations
+
+**GOOD Example (Manpower Calculation):**
+
+**Takt Time** = 3600 / 150 UPH = **24 detik**
+
+| Station | CT | MP Raw | MP (/0.85) | Rounded |
+|---------|-----|--------|------------|--------|
+| MBT | 40s | 1.67 | 1.96 | **2 MP** |
+| RFT | 60s | 2.50 | 2.94 | **3 MP** |
+
+**Total: 5 MP**
+**Investment** = 5 x Rp 13.5M = **Rp 67.5M/bulan**
+
+**BAD Example:** Long paragraphs explaining each step, repeating formulas multiple times.
 
 ## 🌐 Language Support (CRITICAL - MUST FOLLOW!):
 
@@ -128,10 +152,38 @@ const SYSTEM_PROMPT = `You are an expert RFQ (Request for Quotation) assistant f
 
 ⚠️ **NEVER mix languages!** If user speaks Chinese, your ENTIRE response must be in Chinese.
 
-## About SATNUSA:
-- PT SATNUSA PERSADA is a leading EMS provider in Batam, Indonesia
+## About SATNUSA (SN):
+- **SN** = **SATNUSA** = **PT SATNUSA PERSADA**
+- SATNUSA owns and operates this RFQ AI Agent
+- Leading EMS provider in Batam, Indonesia
 - Specializes in PCBA manufacturing, testing, and assembly
-- Serves major customers including XIAOMI, TCL, HUAWEI, and other OEM brands
+- Major customers: XIAOMI, TCL, HUAWEI, and other OEM brands
+
+## 📷 IMAGE UPLOAD HANDLING (CRITICAL - MUST FOLLOW!):
+
+When user uploads an image containing station list/table:
+
+**STEP 1: AUTO-EXTRACT stations from image**
+Read the image carefully and extract ALL station names/codes. Look for:
+- Column headers: "Station", "工位", "Test Item", "工序"
+- Station codes: MBT, CAL, CAL1, CAL2, RFT, RFT1, RFT2, WIFIBT, MMI, VISUAL, etc.
+- Chinese names: 4G仪表, 5G仪表, 主板MMI, 副板MMI, 主板装盘入库, etc.
+
+**STEP 2: MUST call find_similar_models tool!**
+⚠️ CRITICAL: You MUST call the find_similar_models tool!
+⚠️ DO NOT generate markdown table manually!
+⚠️ DO NOT ask user "What stations do you want?"
+⚠️ The UI will render the tool results as clickable cards!
+
+**Correct workflow:**
+1. Extract stations from image: ["MBT", "CAL", "RFT", "WIFIBT", "MMI"]
+2. Call find_similar_models tool with stations array
+3. Tool returns matches with id, code, customer, similarity
+4. Write brief summary like "Ditemukan 3 model serupa:"
+5. UI automatically shows clickable model cards from tool result
+
+**WRONG:** Generating markdown table with fake model names
+**RIGHT:** Calling find_similar_models tool and letting UI render cards
 
 ## 🛠️ Available Tools:
 
@@ -496,20 +548,37 @@ async function callOpenRouterWithTools(
 /**
  * Extract stations from response - Database-driven validation
  * Returns undefined for general Q&A to avoid false positives
+ * 
+ * IMPORTANT: Only extract stations when user uploads image or explicitly
+ * requests station list extraction. DO NOT trigger for:
+ * - Manpower/cost calculations (even if they mention station names)
+ * - General Q&A about stations
+ * - Station explanations
  */
 async function extractStationsFromResponse(
   content: string,
   hasImage: boolean,
   toolsUsed: string[]
 ): Promise<AgentResponse['stations']> {
-  // Only extract stations if context is relevant
-  const hasStationContext = 
-    hasImage ||
-    toolsUsed.includes('find_similar_models') ||
-    toolsUsed.includes('get_station_details') ||
-    /station[s]?\s*(list|:)|daftar\s*station|extracted\s*station/i.test(content);
+  // STRICT: Only extract stations if:
+  // 1. User uploaded an image (station list extraction)
+  // 2. find_similar_models tool was used (implies station matching context)
+  // 
+  // DO NOT extract for:
+  // - search_knowledge (manpower calculations, formulas)
+  // - get_station_details (station explanations)
+  // - General responses mentioning station names
   
-  if (!hasStationContext) {
+  const hasStationExtractionContext = 
+    hasImage ||
+    toolsUsed.includes('find_similar_models');
+  
+  // Explicitly exclude calculation/explanation contexts
+  const isCalculationContext = 
+    toolsUsed.includes('search_knowledge') ||
+    /manpower|investasi|investment|cycle\s*time|takt\s*time|UPH|efisiensi|efficiency/i.test(content);
+  
+  if (!hasStationExtractionContext || isCalculationContext) {
     return undefined;
   }
   

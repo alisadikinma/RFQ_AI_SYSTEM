@@ -10,10 +10,10 @@
 
 <p align="center">
   <a href="#features">Features</a> •
+  <a href="#ai-agent">AI Agent</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#tech-stack">Tech Stack</a> •
-  <a href="#getting-started">Getting Started</a> •
-  <a href="#documentation">Documentation</a>
+  <a href="#getting-started">Getting Started</a>
 </p>
 
 <p align="center">
@@ -22,6 +22,7 @@
   <img src="https://img.shields.io/badge/Supabase-PostgreSQL-green?logo=supabase" alt="Supabase" />
   <img src="https://img.shields.io/badge/pgvector-0.7-purple" alt="pgvector" />
   <img src="https://img.shields.io/badge/Gemini-2.0_Flash-orange?logo=google" alt="Gemini" />
+  <img src="https://img.shields.io/badge/AI_Agent-Agentic_RAG-red" alt="AI Agent" />
 </p>
 
 ---
@@ -32,17 +33,14 @@
 - [The Problem](#the-problem)
 - [The Solution](#the-solution)
 - [Key Features](#features)
-- [Typical RFQ Input Data](#typical-rfq-input-data)
+- [🤖 RFQ AI Agent](#-rfq-ai-agent-the-brain-of-the-system)
 - [System Architecture](#architecture)
 - [AI/ML Components](#aiml-components)
 - [Database Design](#database-design)
 - [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [API Reference](#api-reference)
 - [Development Roadmap](#development-roadmap)
-- [Contributing](#contributing)
-- [License](#license)
 
 ---
 
@@ -50,9 +48,7 @@
 
 **RFQ AI System** is an intelligent automation platform designed specifically for the **Electronics Manufacturing Services (EMS)** industry. It transforms the traditionally manual, expertise-dependent RFQ (Request for Quote) process into an AI-driven workflow that delivers accurate cost estimations in minutes instead of hours.
 
-The system leverages **multimodal similarity matching** (PCB geometry + station patterns), **historical production data analysis**, and **Large Language Models** to predict required test stations, estimate manpower requirements, and generate comprehensive cost breakdowns.
-
-> **Note**: BOM (Bill of Materials) analysis is available as an **optional enhancement** when customers provide detailed component lists. The core system works effectively with PCB specifications and station patterns alone.
+The system leverages **Agentic RAG (Retrieval Augmented Generation)**, **multimodal similarity matching**, **historical production data analysis**, and **Large Language Models** to predict required test stations, estimate manpower requirements, and generate comprehensive cost breakdowns.
 
 ### 🏆 Key Metrics
 
@@ -109,22 +105,17 @@ RFQ AI System automates the entire workflow using AI/ML:
 │                    AI-Powered RFQ Process (15-30 min)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  1. 📤 Input RFQ data (PCB specs, stations, qty, UPH) or upload files   │
+│  1. 📤 Input via Chat: Type stations, upload image, or paste Excel      │
 │                           ↓                                             │
-│  2. 🤖 AI parses & normalizes data (maps customer terms → standard)     │
+│  2. 🤖 AI Agent automatically detects intent & extracts data            │
 │                           ↓                                             │
-│  3. 🔮 Similarity Engine finds matching historical models               │
-│      ├── PCB Geometry (dimensions, layers, cavity, complexity)          │
-│      ├── Station Pattern (test sequence, coverage)                      │
-│      └── BOM Features (optional, if customer provides)                  │
+│  3. 🔮 Similarity Engine finds matching historical models (< 50ms)      │
 │                           ↓                                             │
-│  4. 🧪 Auto-predict test stations from similar models + inference rules │
+│  4. 🧪 Auto-predict stations + calculate manpower with formulas         │
 │                           ↓                                             │
-│  5. 👷 Calculate manpower from station requirements & cycle times       │
+│  5. 💰 Generate cost breakdown with investment estimates                │
 │                           ↓                                             │
-│  6. 💰 Generate comprehensive cost breakdown                            │
-│                           ↓                                             │
-│  7. 📝 AI explains results in natural language (Bahasa Indonesia)       │
+│  6. 📝 AI explains results in natural language (ID/EN/中文)             │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -134,80 +125,515 @@ RFQ AI System automates the entire workflow using AI/ML:
 ## ✨ Features
 
 ### 🔍 Intelligent Similarity Matching
-
-- **Primary matching**: PCB geometry (size, layers, cavity) + station patterns
-- **Optional enhancement**: BOM semantic analysis when component data available
-- **Vector similarity search**: Uses pgvector for sub-50ms similarity queries
-- **Adaptive weighting**: PCB (70%) + Stations (30%), or PCB (50%) + Stations (25%) + BOM (25%) when available
-- **Top-N recommendations**: Returns ranked similar models with confidence scores
+- **Vector similarity search**: Uses pgvector for sub-50ms queries
+- **Station pattern matching**: Jaccard similarity on 6,000+ historical records
+- **Top-N recommendations**: Ranked similar models with confidence scores
 
 ### 🧪 Smart Station Prediction
+- **Historical pattern learning**: Learns from 784+ models, 6,189 station mappings
+- **Customer-specific mapping**: 257+ station aliases across 15 customers
+- **Gap detection**: Identifies missing stations based on product type
 
-- **Historical pattern learning**: Learns from 6,000+ historical model-station records
-- **Rule-based inference**: Uses `triggers_if` conditions (e.g., "has_rf" → add RFT station)
-- **Customer-specific mapping**: Handles varied terminology via 257+ station aliases
-- **Gap detection**: Identifies missing stations based on BOM components
+### 🧮 Automated Calculations
+- **Manpower formulas**: `MP = CT ÷ Takt Time × (1/Efficiency)`
+- **Investment estimates**: Based on 2025 Batam minimum wage (Rp 4,989,600)
+- **Multi-fixture support**: Fractional MP for parallel machine operation
 
-### 📊 Automated File Parsing
-
-- **Excel parsing**: Extracts station lists, quantities, specifications
-- **PDF extraction**: Reads PCB dimensions, layer count, specifications
-- **LLM fallback**: Uses Gemini 2.0 Flash when algorithmic parsing fails
-- **Confidence scoring**: Reports extraction confidence for review
-
-### 💰 Comprehensive Cost Engine
-
-- **Material costs**: PCB, components, packaging
-- **Process costs**: SMT line, assembly operations
-- **Labor costs**: Direct + indirect manpower
-- **Test costs**: Per-station costs with fixture amortization
-- **Overhead & margin**: Configurable rates
-
-### 🌐 Multilingual AI Explanations
-
-- **Natural language output**: Explains results in Bahasa Indonesia
-- **Actionable suggestions**: AI-generated recommendations for cost optimization
-- **Risk assessment**: Identifies potential issues and mitigation strategies
+### 🌐 Multilingual AI
+- **Bahasa Indonesia**: Primary response language
+- **English**: Technical terms preserved
+- **中文 (Chinese)**: Full support for Chinese queries
 
 ---
 
-## 📥 Typical RFQ Input Data
+## 🤖 RFQ AI Agent: The Brain of the System
 
-Customers typically provide the following data when requesting a quote:
+The **RFQ AI Agent** is a sophisticated conversational AI powered by **Agentic RAG** (Retrieval Augmented Generation) architecture. Unlike traditional chatbots that simply generate text, our AI Agent can **think**, **decide**, **retrieve data**, **calculate**, and **take actions** autonomously.
 
-### Required Data (Always Provided)
+### 🧠 How the AI Agent Works
 
-| Data | Description | Example |
-|------|-------------|--------|
-| **PCB Dimensions** | Board size from drawing/spec | 120mm × 80mm |
-| **Layer Count** | PCB layer configuration | 4-layer, 6-layer |
-| **Cavity Count** | Panels per board | 4-cavity, 8-cavity |
-| **Station List** | Required test/assembly stations | RFT, MMI, VISUAL, OS_DOWNLOAD |
-| **Target Quantity** | Production lot size | 50,000 pcs/month |
-| **Target UPH** | Units per hour requirement | 150 UPH |
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         RFQ AI AGENT ARCHITECTURE                            │
+│                        ═══════════════════════════                           │
+│                                                                              │
+│    ┌─────────────────────────────────────────────────────────────────┐      │
+│    │                        USER INPUT                                │      │
+│    │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │      │
+│    │  │  Text   │  │  Image  │  │  Excel  │  │  Voice  │            │      │
+│    │  │ "Cari   │  │ Station │  │  Paste  │  │ (Future)│            │      │
+│    │  │ model"  │  │  List   │  │  Data   │  │         │            │      │
+│    │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │      │
+│    │       └────────────┴────────────┴────────────┘                  │      │
+│    │                           │                                      │      │
+│    └───────────────────────────┼──────────────────────────────────────┘      │
+│                                ▼                                             │
+│    ┌─────────────────────────────────────────────────────────────────┐      │
+│    │                    🧠 AI BRAIN (Gemini 2.0 Flash)                │      │
+│    │  ┌───────────────────────────────────────────────────────────┐  │      │
+│    │  │                   INTENT DETECTION                         │  │      │
+│    │  │                                                            │  │      │
+│    │  │   "Cari model mirip"  →  🔍 find_similar_models           │  │      │
+│    │  │   "Customer apa saja" →  📊 query_database                │  │      │
+│    │  │   "Apa itu RFT?"      →  📖 search_knowledge              │  │      │
+│    │  │   "Hitung MP 5 station" → 🧮 calculate_manpower           │  │      │
+│    │  │   [Upload Image]      →  🖼️ extract + find_similar        │  │      │
+│    │  │                                                            │  │      │
+│    │  └───────────────────────────────────────────────────────────┘  │      │
+│    │                           │                                      │      │
+│    │                           ▼                                      │      │
+│    │  ┌───────────────────────────────────────────────────────────┐  │      │
+│    │  │                    TOOL SELECTION                          │  │      │
+│    │  │         AI decides which tool(s) to call                   │  │      │
+│    │  └───────────────────────────────────────────────────────────┘  │      │
+│    └─────────────────────────────┬────────────────────────────────────┘      │
+│                                  │                                           │
+│                                  ▼                                           │
+│    ┌─────────────────────────────────────────────────────────────────┐      │
+│    │                      🔧 TOOL EXECUTION                          │      │
+│    │                                                                  │      │
+│    │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────┐ │      │
+│    │  │    🔍        │ │    📊        │ │    📖        │ │  🧮    │ │      │
+│    │  │ find_similar │ │ query_       │ │ search_      │ │calculate│ │      │
+│    │  │ _models      │ │ database     │ │ knowledge    │ │_manpower│ │      │
+│    │  ├──────────────┤ ├──────────────┤ ├──────────────┤ ├────────┤ │      │
+│    │  │ • Station    │ │ • Customers  │ │ • EMS Guide  │ │• CT    │ │      │
+│    │  │   matching   │ │ • Models     │ │ • Station    │ │• UPH   │ │      │
+│    │  │ • Jaccard    │ │ • Stations   │ │   definitions│ │• Takt  │ │      │
+│    │  │   similarity │ │ • Aggregates │ │ • Manpower   │ │• MP    │ │      │
+│    │  │ • Top 5      │ │ • Filters    │ │   formulas   │ │• Cost  │ │      │
+│    │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └───┬────┘ │      │
+│    │         │                │                │              │      │      │
+│    │         └────────────────┴────────────────┴──────────────┘      │      │
+│    │                                  │                               │      │
+│    └──────────────────────────────────┼───────────────────────────────┘      │
+│                                       ▼                                      │
+│    ┌─────────────────────────────────────────────────────────────────┐      │
+│    │                    📤 RESPONSE GENERATION                        │      │
+│    │  ┌───────────────────────────────────────────────────────────┐  │      │
+│    │  │  • Streaming real-time response                           │  │      │
+│    │  │  • Tool results rendered as interactive UI cards          │  │      │
+│    │  │  • Natural language explanation in user's language        │  │      │
+│    │  │  • Clickable model cards with similarity scores           │  │      │
+│    │  └───────────────────────────────────────────────────────────┘  │      │
+│    └─────────────────────────────────────────────────────────────────┘      │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Optional Data (Sometimes Provided)
+### 🔧 AI Agent Tools (Function Calling)
 
-| Data | Description | When Provided |
-|------|-------------|---------------|
-| **Component Count** | Total parts on board | Sometimes in specs |
-| **Special Requirements** | RF, automotive, etc. | Complex products |
-| **Reference Product** | Similar existing model | Repeat customers |
-| **Sample Unit** | Physical sample | NPI projects |
+The AI Agent has access to **4 specialized tools** that it can invoke autonomously based on user intent:
 
-### Rarely Provided
+#### Tool 1: `find_similar_models` 🔍
 
-| Data | Description | Why Rare |
-|------|-------------|----------|
-| **BOM List** | Detailed component list | Confidential IP |
-| **Schematic** | Circuit design | Confidential IP |
-| **Gerber Files** | PCB layout | Confidential IP |
+**Purpose**: Find historically similar models based on station patterns
 
-> **System Design**: The AI system is designed to work effectively with **Required Data** only. BOM analysis is available as an optional enhancement when customers choose to share component details.
+```typescript
+// Input
+{
+  stations: ["MBT", "CAL", "RFT", "WIFIBT", "MMI"],
+  customer_code?: "XIAOMI",  // Optional filter
+  limit?: 5
+}
+
+// Output
+{
+  models: [
+    { id: "uuid", code: "L83C5", customer: "XIAOMI", similarity: 78, stations: [...] },
+    { id: "uuid", code: "M2012K11AC", customer: "XIAOMI", similarity: 72, stations: [...] },
+    ...
+  ]
+}
+```
+
+**How it works**:
+1. Normalizes input station names using alias mapping (257+ aliases)
+2. Calculates **Jaccard Similarity**: `|A ∩ B| / |A ∪ B|`
+3. Returns top matches ranked by similarity percentage
+4. UI renders results as **clickable model cards**
+
+#### Tool 2: `query_database` 📊
+
+**Purpose**: Query production database for customers, models, stations, and analytics
+
+```typescript
+// Input
+{
+  intent: "list_customers" | "list_models" | "get_model_detail" | "count_by_customer" | ...
+  filters?: { customer?: string, status?: string, search?: string }
+}
+
+// Output varies by intent
+// Example: list_customers
+{
+  type: "table",
+  data: [
+    { code: "XIAOMI", name: "Xiaomi Technology", model_count: 156 },
+    { code: "TCL", name: "TCL Electronics", model_count: 89 },
+    ...
+  ]
+}
+```
+
+**Supported Intents**:
+| Intent | Description | Example Query |
+|--------|-------------|---------------|
+| `list_customers` | All customers | "Customer apa saja?" |
+| `list_models` | Models with filters | "Model dari XIAOMI?" |
+| `get_model_detail` | Single model info | "Detail model L83C5" |
+| `count_by_customer` | Model count stats | "Customer mana paling banyak model?" |
+| `station_usage_stats` | Most used stations | "Station paling sering dipakai?" |
+| `search_models_by_station` | Find by station | "Model yang pakai RFT + CAL" |
+
+#### Tool 3: `search_knowledge` 📖
+
+**Purpose**: Search EMS knowledge base using RAG (Retrieval Augmented Generation)
+
+```typescript
+// Input
+{
+  query: "Apa itu RFT dan kapan digunakan?",
+  top_k?: 3
+}
+
+// Output
+{
+  answer: "RFT (Radio Frequency Test) adalah station untuk...",
+  sources: ["EMS_Test_Line_Reference_Guide.md"],
+  confidence: 0.92
+}
+```
+
+**Knowledge Base Contents**:
+- 📘 **EMS Test Line Reference Guide**: 38 station definitions, cycle times, costs
+- 📗 **Manpower Calculation Formulas**: Industry-standard MP formulas
+- 📙 **IPC Standards**: Quality and inspection standards
+- 📕 **SMT Process Guide**: Surface mount technology workflow
+
+#### Tool 4: `calculate_manpower` 🧮
+
+**Purpose**: Calculate manpower requirements using industry formulas
+
+```typescript
+// Input
+{
+  stations: [
+    { name: "MBT", cycle_time: 45 },
+    { name: "CAL", cycle_time: 60 },
+    { name: "RFT", cycle_time: 90 }
+  ],
+  target_uph: 120,
+  efficiency?: 0.85
+}
+
+// Output
+{
+  takt_time: 30,  // seconds (3600 / 120 UPH)
+  stations: [
+    { name: "MBT", ct: 45, mp: 1.76, rounded: 2 },
+    { name: "CAL", ct: 60, mp: 2.35, rounded: 3 },
+    { name: "RFT", ct: 90, mp: 3.53, rounded: 4 }
+  ],
+  total_mp: 9,
+  monthly_investment: "Rp 121,500,000"  // 9 × Rp 13.5M
+}
+```
+
+**Formula Used**:
+```
+Manpower = Cycle Time ÷ Takt Time × (1 / Efficiency)
+Takt Time = 3600 ÷ Target UPH
+Investment = Total MP × Rp 13,500,000/month
+```
+
+### 🖼️ Multimodal Input Processing
+
+The AI Agent can process multiple input types:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     MULTIMODAL INPUT PROCESSING                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  📝 TEXT INPUT                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ User: "Cari model dengan station MBT, CAL, RFT, MMI"            │   │
+│  │                          ↓                                       │   │
+│  │ AI: Detects intent → Extracts stations → Calls find_similar     │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  🖼️ IMAGE INPUT (Screenshot/Photo of Station List)                     │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ User: [Uploads image of Excel station list]                     │   │
+│  │                          ↓                                       │   │
+│  │ AI: Vision model reads image → Extracts all station names       │   │
+│  │     → Auto-calls find_similar_models → Shows clickable cards    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  📋 EXCEL PASTE (Smart Paste Feature)                                   │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ User: [Pastes Excel data with Ctrl+V]                           │   │
+│  │                          ↓                                       │   │
+│  │ AI: Detects tabular data → Parses columns → Extracts stations   │   │
+│  │     → Processes as structured input                              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  🌐 MULTILINGUAL (ID/EN/中文)                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ User: "有哪些客户？" (Chinese: What customers?)                  │   │
+│  │                          ↓                                       │   │
+│  │ AI: Detects Chinese → Queries database → Responds in 中文       │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 🔄 Agentic RAG: How It All Comes Together
+
+**Agentic RAG** combines the power of Large Language Models with real-time data retrieval and autonomous decision-making:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          AGENTIC RAG PIPELINE                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  STEP 1: UNDERSTANDING                                                      │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  User Query: "Hitung MP untuk 5 station dengan CT rata-rata 50s,      │ │
+│  │              target 100 UPH, lalu cari model serupa"                   │ │
+│  │                                                                        │ │
+│  │  AI Analysis:                                                          │ │
+│  │  • Intent 1: Calculate manpower → calculate_manpower tool             │ │
+│  │  • Intent 2: Find similar models → find_similar_models tool           │ │
+│  │  • Language: Bahasa Indonesia → Respond in ID                         │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  STEP 2: PLANNING                                                           │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  AI decides execution order:                                           │ │
+│  │  1. First: calculate_manpower (need MP results)                        │ │
+│  │  2. Then: find_similar_models (use station list from calculation)      │ │
+│  │  3. Finally: Synthesize both results into coherent response            │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  STEP 3: EXECUTION                                                          │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  Tool Call 1: calculate_manpower                                       │ │
+│  │  ├── Input: 5 stations, CT=50s, UPH=100                               │ │
+│  │  ├── Process: Takt=36s, MP per station=1.64, Total=8.2→9 MP           │ │
+│  │  └── Output: { total_mp: 9, investment: "Rp 121,500,000" }            │ │
+│  │                                                                        │ │
+│  │  Tool Call 2: find_similar_models                                      │ │
+│  │  ├── Input: extracted station codes                                    │ │
+│  │  ├── Process: Jaccard similarity search on 6,189 records              │ │
+│  │  └── Output: [{ code: "L83C5", similarity: 75% }, ...]                │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                              ↓                                              │
+│  STEP 4: SYNTHESIS                                                          │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │  AI generates natural language response:                               │ │
+│  │                                                                        │ │
+│  │  "📊 Hasil Perhitungan Manpower:                                       │ │
+│  │   • Takt Time: 36 detik (3600 ÷ 100 UPH)                              │ │
+│  │   • Total MP: 9 operator                                               │ │
+│  │   • Investasi: Rp 121,500,000/bulan                                   │ │
+│  │                                                                        │ │
+│  │   🔍 Ditemukan 3 model serupa:"                                        │ │
+│  │                                                                        │ │
+│  │   [ModelCard: L83C5 - 75%] [ModelCard: M2012 - 68%] [...]             │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 📊 Real-Time Streaming Response
+
+The AI Agent uses **streaming** to provide instant feedback:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      STREAMING RESPONSE FLOW                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Time: 0ms     User sends message                                       │
+│        ↓                                                                │
+│  Time: 50ms    "●" Thinking indicator appears                           │
+│        ↓                                                                │
+│  Time: 200ms   First token streams: "📊 Hasil..."                       │
+│        ↓                                                                │
+│  Time: 500ms   Text continues streaming word by word                    │
+│        ↓                                                                │
+│  Time: 800ms   Tool call detected → Tool executing indicator            │
+│        ↓                                                                │
+│  Time: 1200ms  Tool results received → UI renders cards                 │
+│        ↓                                                                │
+│  Time: 1500ms  Response complete ✓                                      │
+│                                                                         │
+│  RESULT: User sees response building in real-time, feels instant!       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 🎯 Example Conversations
+
+#### Example 1: Finding Similar Models
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 👤 User:                                                                │
+│    "Cari 3 model yang mirip dengan station: MBT, CAL, RFT, WIFIBT, MMI" │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 AI Agent Process:                                                    │
+│    1. Detect intent: find_similar_models                                │
+│    2. Extract stations: ["MBT", "CAL", "RFT", "WIFIBT", "MMI"]          │
+│    3. Call tool with limit=3                                            │
+│    4. Receive results from database                                     │
+│    5. Generate response + render model cards                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Response:                                                            │
+│    "Ditemukan 3 model dengan pola station serupa:"                      │
+│                                                                         │
+│    ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                  │
+│    │  📦 L83C5    │ │  📦 M2012K   │ │  📦 2201117  │                  │
+│    │  XIAOMI      │ │  XIAOMI      │ │  TCL         │                  │
+│    │  ━━━━━━━━    │ │  ━━━━━━━━    │ │  ━━━━━━━━    │                  │
+│    │  78% match   │ │  72% match   │ │  65% match   │                  │
+│    │  [View →]    │ │  [View →]    │ │  [View →]    │                  │
+│    └──────────────┘ └──────────────┘ └──────────────┘                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Example 2: Manpower Calculation
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 👤 User:                                                                │
+│    "Hitung MP: MBT 45s, CAL 60s, RFT 90s, MMI 30s. Target 120 UPH"     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 AI Agent Process:                                                    │
+│    1. Detect intent: calculate_manpower                                 │
+│    2. Parse stations with cycle times                                   │
+│    3. Calculate using formula: MP = CT ÷ Takt × (1/0.85)               │
+│    4. Sum up and apply rounding                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Response:                                                            │
+│                                                                         │
+│    📊 **Hasil Perhitungan Manpower**                                    │
+│                                                                         │
+│    | Station | CT (s) | MP Raw | MP Final |                            │
+│    |---------|--------|--------|----------|                            │
+│    | MBT     | 45     | 1.76   | 2        |                            │
+│    | CAL     | 60     | 2.35   | 3        |                            │
+│    | RFT     | 90     | 3.53   | 4        |                            │
+│    | MMI     | 30     | 1.18   | 2        |                            │
+│    | **Total** |      |        | **11 MP**|                            │
+│                                                                         │
+│    💰 Investasi: **Rp 148,500,000/bulan**                               │
+│    📐 Takt Time: 30 detik (3600 ÷ 120 UPH)                             │
+│    ⚙️ Efficiency: 85%                                                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Example 3: Knowledge Query
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 👤 User:                                                                │
+│    "Apa itu station RFT dan kapan harus digunakan?"                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 AI Agent Process:                                                    │
+│    1. Detect intent: search_knowledge                                   │
+│    2. Search RAG knowledge base for "RFT"                               │
+│    3. Retrieve relevant chunks from EMS Guide                           │
+│    4. Synthesize answer from retrieved context                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Response:                                                            │
+│                                                                         │
+│    📖 **RFT (Radio Frequency Test)**                                    │
+│                                                                         │
+│    RFT adalah station untuk menguji performa RF pada produk wireless:   │
+│                                                                         │
+│    • **Fungsi**: Validasi transmit power, receive sensitivity,          │
+│      frequency accuracy, dan modulation quality                         │
+│                                                                         │
+│    • **Cycle Time**: 30-180 detik (tergantung jumlah band)             │
+│                                                                         │
+│    • **Wajib untuk produk dengan**:                                     │
+│      - WiFi / Bluetooth module                                          │
+│      - 2G/3G/4G/5G cellular                                            │
+│      - IoT wireless devices                                             │
+│                                                                         │
+│    📚 Source: EMS_Test_Line_Reference_Guide.md                          │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Example 4: Chinese Language Support
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 👤 User:                                                                │
+│    "小米有哪些型号？"                                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 AI Agent Process:                                                    │
+│    1. Detect language: Chinese (中文)                                   │
+│    2. Detect intent: query_database (list_models)                       │
+│    3. Filter: customer = "XIAOMI"                                       │
+│    4. Respond in Chinese                                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│ 🤖 Response:                                                            │
+│                                                                         │
+│    📦 **小米 (XIAOMI) 型号列表**                                         │
+│                                                                         │
+│    共找到 156 个型号，以下是部分列表：                                    │
+│                                                                         │
+│    | 型号代码 | 名称 | 工站数量 |                                        │
+│    |----------|------|----------|                                        │
+│    | L83C5    | -    | 12       |                                        │
+│    | M2012K11AC | -  | 15       |                                        │
+│    | 22071212AG | -  | 10       |                                        │
+│    | ...      | ...  | ...      |                                        │
+│                                                                         │
+│    需要查看特定型号的详细信息吗？                                         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 🛡️ AI Agent Safety & Accuracy
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      SAFETY & ACCURACY MEASURES                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ✅ GROUNDED IN DATA                                                    │
+│     • All responses backed by database queries or knowledge base        │
+│     • No hallucination - if data not found, AI says "tidak ditemukan"   │
+│     • Source attribution for knowledge-based answers                    │
+│                                                                         │
+│  ✅ VALIDATED CALCULATIONS                                              │
+│     • Formulas from industry standards (IPC, SMT guidelines)            │
+│     • Efficiency factor (85%) based on real production data             │
+│     • Wage data from 2025 Batam minimum wage regulations                │
+│                                                                         │
+│  ✅ CONTEXT AWARENESS                                                   │
+│     • Distinguishes calculation context from station extraction         │
+│     • Doesn't confuse "station" mentions in formulas as actual stations │
+│     • Maintains conversation history for multi-turn queries             │
+│                                                                         │
+│  ✅ GRACEFUL FALLBACKS                                                  │
+│     • Primary: Gemini 2.0 Flash (1M token context)                      │
+│     • Fallback: Llama 3.3 70B via OpenRouter                           │
+│     • Error handling with user-friendly messages                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ System Architecture
 
 ### High-Level System Architecture
 
@@ -227,15 +653,15 @@ Customers typically provide the following data when requesting a quote:
 │  │                        CORE ENGINES                                  │    │
 │  ├─────────────────────────────────────────────────────────────────────┤    │
 │  │                                                                      │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │    │
-│  │  │  Similarity  │  │    File      │  │    Cost      │               │    │
-│  │  │   Engine     │  │   Parsers    │  │   Engine     │               │    │
-│  │  ├──────────────┤  ├──────────────┤  ├──────────────┤               │    │
-│  │  │ • PCB Vector │  │ • Excel Parse│  │ • Material   │               │    │
-│  │  │ • Station Vec│  │ • PDF Extract│  │ • Process    │               │    │
-│  │  │ • BOM (opt)  │  │ • LLM Parse  │  │ • Labor      │               │    │
-│  │  │ • Hybrid     │  │ • Validation │  │ • Test       │               │    │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘               │    │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │    │
+│  │  │  Similarity  │  │     RAG      │  │  Calculation │  │   File   │ │    │
+│  │  │   Engine     │  │   Knowledge  │  │    Engine    │  │  Parser  │ │    │
+│  │  ├──────────────┤  ├──────────────┤  ├──────────────┤  ├──────────┤ │    │
+│  │  │ • Station    │  │ • EMS Guide  │  │ • Manpower   │  │ • Excel  │ │    │
+│  │  │   matching   │  │ • MP Formulas│  │ • Investment │  │ • PDF    │ │    │
+│  │  │ • Jaccard    │  │ • IPC Stds   │  │ • Takt Time  │  │ • Image  │ │    │
+│  │  │ • pgvector   │  │ • SMT Guide  │  │ • Cost Model │  │ • Vision │ │    │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────┘ │    │
 │  │                                                                      │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
@@ -250,187 +676,18 @@ Customers typically provide the following data when requesting a quote:
 └─────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐
-  │  Input   │────►│  Parse &  │────►│  Generate  │────►│   Similarity │
-  │  Data    │     │  Normalize│     │  Vectors   │     │    Search    │
+  │  Input   │────►│  AI Agent │────►│    Tool    │────►│   Response   │
+  │  (Any)   │     │   Brain   │     │  Execution │     │   + UI Cards │
   └──────────┘     └───────────┘     └────────────┘     └──────────────┘
        │                │                  │                    │
-       │           ┌────┴────────┐     ┌────┴────┐          ┌────┴────┐
-       │           │ PCB Specs │     │PCB Vec  │          │Top 5    │
-       │           │ Stations  │     │Station  │          │Matches  │
-       │           │ Qty, UPH  │     │Pattern  │          └─────────┘
-       │           │ BOM (opt) │     │BOM (opt)│                │
-       │           └───────────┘     └─────────┘                │
-       │                                                        │
-       ▼                                                        ▼
-  ┌──────────┐     ┌───────────┐     ┌────────────┐     ┌──────────────┐
-  │   LLM    │────►│  Predict  │────►│  Calculate │────►│   Generate   │
-  │ Fallback │     │  Stations │     │    Costs   │     │    Report    │
-  └──────────┘     └───────────┘     └────────────┘     └──────────────┘
-                         │                  │                    │
-                    ┌────┴────┐        ┌────┴────┐          ┌────┴────┐
-                    │Inferred │        │Cost     │          │Bahasa   │
-                    │Stations │        │Breakdown│          │Summary  │
-                    └─────────┘        └─────────┘          └─────────┘
+       │           ┌────┴────┐        ┌────┴────┐          ┌────┴────┐
+  ┌────┴────┐      │ Intent  │        │ Tools:  │          │ Results │
+  │• Text   │      │Detection│        │• Similar│          │• Cards  │
+  │• Image  │      │• Query? │        │• Query  │          │• Tables │
+  │• Excel  │      │• Calc?  │        │• Search │          │• Charts │
+  │• Voice  │      │• Info?  │        │• Calc   │          │• Text   │
+  └─────────┘      └─────────┘        └─────────┘          └─────────┘
 ```
-
----
-
-## 🤖 AI/ML Components
-
-### 1. Multimodal Similarity Engine
-
-The heart of the system - finds similar historical models using vector similarity:
-
-```typescript
-// Similarity Score Calculation (Standard Mode - without BOM)
-Score_total = (W_pcb × Sim_PCB) + (W_station × Sim_Stations)
-
-Where:
-- W_pcb = 0.70 (PCB geometry weight)
-- W_station = 0.30 (Station pattern weight)
-- Sim_PCB = cosine_similarity(query_pcb_vector, historical_pcb_vector)
-- Sim_Stations = jaccard_similarity(query_stations, historical_stations)
-
-// Enhanced Mode (when customer provides BOM)
-Score_total = (W_pcb × Sim_PCB) + (W_station × Sim_Stations) + (W_bom × Sim_BOM)
-
-Where:
-- W_pcb = 0.50 (PCB geometry weight)
-- W_station = 0.25 (Station pattern weight)  
-- W_bom = 0.25 (BOM semantics weight)
-```
-
-#### PCB Feature Vector (Geometric)
-
-```typescript
-interface PCBFeatures {
-  board_length_mm: number;      // 0-500mm normalized
-  board_width_mm: number;       // 0-500mm normalized
-  board_area_mm2: number;       // Computed
-  layer_count: number;          // 1-16 layers
-  cavity_count: number;         // 1-100 cavities
-  is_double_sided: boolean;     // TOP/BOT assembly
-  has_fine_pitch: boolean;      // <0.5mm pitch components
-  has_bga: boolean;             // Ball Grid Array
-  smt_points_top: number;       // SMT placement points
-  smt_points_bot: number;
-}
-```
-
-#### Station Pattern Vector
-
-```typescript
-interface StationPattern {
-  station_codes: string[];      // List of stations (normalized)
-  station_count: number;        // Total station count
-  has_rf_test: boolean;         // RFT, CAL/RFT stations present
-  has_functional: boolean;      // FCT, MMI stations present
-  has_programming: boolean;     // OS_DOWNLOAD present
-  has_inspection: boolean;      // VISUAL, AOI present
-  has_assembly: boolean;        // UNDERFILL, T_GREASE, SHIELDING
-  complexity_score: number;     // 1-10 based on station count & types
-}
-```
-
-#### BOM Feature Vector (Optional - When Customer Provides)
-
-> **Note**: BOM analysis is optional. Most customers do not share detailed component lists. When available, it enhances matching accuracy.
-
-```typescript
-interface BOMFeatures {
-  total_components: number;     // Part count
-  unique_parts: number;         // Distinct part numbers
-  has_mcu: boolean;             // Microcontroller present
-  has_rf_2g: boolean;           // 2G/GSM module
-  has_rf_3g: boolean;           // 3G/UMTS module
-  has_rf_4g: boolean;           // 4G/LTE module
-  has_rf_5g: boolean;           // 5G module
-  has_wifi: boolean;            // WiFi module
-  has_bluetooth: boolean;       // Bluetooth module
-  has_sensor_temp: boolean;     // Temperature sensor
-  has_sensor_imu: boolean;      // Accelerometer/Gyro
-  has_sensor_pressure: boolean; // Pressure sensor
-  has_power_ic: boolean;        // Power management
-  has_battery: boolean;         // Battery connector
-  has_display: boolean;         // LCD/OLED
-  has_camera: boolean;          // Camera module
-  max_package_complexity: number; // BGA=5, QFN=4, QFP=3...
-}
-```
-
-#### Similarity Thresholds
-
-| Score Range | Confidence | Action |
-|-------------|------------|--------|
-| ≥ 0.85 | 🟢 High | Reuse full station plan from match |
-| 0.70 - 0.84 | 🟡 Medium | Adjust stations based on differences |
-| < 0.70 | 🔴 Low | Use rule-based inference |
-
-### 2. Station Inference Engine
-
-When similarity is insufficient, the system infers required stations using rules:
-
-```typescript
-// Station Master with Inference Rules
-{
-  code: "RFT",
-  name: "Radio Frequency Test",
-  triggers_if: ["has_rf_2g", "has_rf_3g", "has_rf_4g", "has_wifi", "has_bluetooth"],
-  required_for: ["wireless_device", "iot_module", "smartphone"]
-}
-
-// Inference Logic
-if (bom.has_rf_4g && !predictedStations.includes('RFT')) {
-  predictedStations.push('RFT');  // Add RF Test
-  predictedStations.push('CAL');  // Add Calibration
-}
-```
-
-#### Inference Rules Summary
-
-| Condition | Inferred Stations |
-|-----------|-------------------|
-| `has_mcu` | OS_DOWNLOAD, MBT, ICT |
-| `has_rf_*` | RFT, CAL, SHIELDING_COVER |
-| `has_sensor_*` | CAL (mandatory) |
-| `has_display` | MMI |
-| `has_power_ic` | CURRENT_TESTING |
-| `has_battery` | CURRENT_TESTING, PCB_CURRENT |
-| `has_bga` | UNDERFILL, AXI |
-| `cavity_count > 1` | ROUTER |
-| `is_double_sided` | AOI_TOP, AOI_BOT |
-
-### 3. LLM Integration (Gemini 2.0 Flash)
-
-Used for intelligent parsing and natural language generation:
-
-```typescript
-// LLM Architecture
-┌─────────────────────────────────────────┐
-│           LLM Layer                     │
-├─────────────────────────────────────────┤
-│                                         │
-│  PRIMARY: Gemini 2.0 Flash              │
-│  ├── 1M token context window            │
-│  ├── Multilingual (ID/EN)               │
-│  ├── JSON mode for structured output    │
-│  └── Free tier: 60 req/min              │
-│                                         │
-│  FALLBACK: Llama 3.3 70B (OpenRouter)   │
-│  └── Only on Gemini failure/rate-limit  │
-│                                         │
-└─────────────────────────────────────────┘
-```
-
-#### LLM Use Cases
-
-| Use Case | Input | Output |
-|----------|-------|--------|
-| Station List Parsing | Customer Excel/PDF | Normalized station codes |
-| PDF Extraction | Drawing/spec PDF | PCB dimensions, layer count |
-| BOM Parsing (Optional) | Component list | Structured JSON with features |
-| Result Explanation | Analysis results | Bahasa Indonesia summary |
-| Suggestions | Cost breakdown | Optimization recommendations |
 
 ---
 
@@ -449,93 +706,30 @@ Used for intelligent parsing and natural language generation:
   │ id (PK)      │         │ id (PK)      │         │ model_id(FK) │
   │ code         │         │ customer_id  │         │ board_length │
   │ name         │         │ code         │         │ board_width  │
-  │ country      │         │ name         │         │ layer_count  │
-  └──────────────┘         │ board_types  │         │ pcb_vector   │◄── pgvector
+  └──────────────┘         │ name         │         │ layer_count  │
+                           │ board_types  │         │ pcb_vector   │◄── pgvector
                            └──────────────┘         └──────────────┘
-                                  │
                                   │
                            ┌──────┴──────┐
                            ▼             ▼
                     ┌──────────────┐  ┌──────────────┐
-                    │model_stations│  │   bom_data   │
+                    │model_stations│  │station_master│
                     │──────────────│  │──────────────│
-                    │ model_id(FK) │  │ model_id(FK) │
-                    │ station_code │  │ part_number  │
-                    │ board_type   │  │ quantity     │
-                    │ sequence     │  │ bom_vector   │◄── pgvector
-                    │ manpower     │  │ features     │
-                    └──────────────┘  └──────────────┘
-                           │
-                           ▼
-                    ┌──────────────┐         ┌──────────────┐
-                    │station_master│◄────────│station_alias │
-                    │──────────────│         │──────────────│
-                    │ id (PK)      │         │ master_id(FK)│
-                    │ code         │         │ alias_name   │
-                    │ name         │         │ customer_id  │
-                    │ triggers_if  │◄── JSON Array for inference
-                    │ required_for │◄── JSON Array
-                    │ cycle_time   │
-                    │ operator_ratio│
-                    └──────────────┘
-
-  ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-  │ rfq_requests │────────<│  rfq_results │         │ rfq_stations │
-  │──────────────│         │──────────────│         │──────────────│
-  │ id (PK)      │         │ rfq_id (FK)  │         │ rfq_id (FK)  │
-  │ customer_id  │         │ similarity   │         │ station_code │
-  │ status       │         │ cost_data    │         │ sequence     │
-  │ created_at   │         │ explanation  │◄── LLM generated      │
-  └──────────────┘         │ suggestions  │◄── LLM generated      │
-                           └──────────────┘         └──────────────┘
-```
-
-### Master-Alias Pattern
-
-The system handles customer-specific station naming through a master-alias pattern:
-
-```sql
--- Master Station (standardized)
-station_master: {
-  code: 'RFT',
-  name: 'Radio Frequency Test',
-  category: 'Testing'
-}
-
--- Customer Aliases (variations)
-station_aliases: [
-  { alias: 'RF_TEST',     customer: NULL },      -- Global alias
-  { alias: 'RFT1',        customer: 'XIAOMI' },  -- XIAOMI specific
-  { alias: 'Signal_Test', customer: 'TCL' },     -- TCL specific
-  { alias: 'RF_Verify',   customer: 'HUAWEI' }   -- HUAWEI specific
-]
-```
-
-### Vector Storage (pgvector)
-
-PostgreSQL with pgvector extension enables fast similarity search:
-
-```sql
--- Enable pgvector
-CREATE EXTENSION IF NOT EXISTS vector;
-
--- PCB feature vector (10 dimensions)
-ALTER TABLE pcb_features 
-ADD COLUMN pcb_vector vector(10);
-
--- BOM feature vector (20 dimensions)  
-ALTER TABLE bom_data
-ADD COLUMN bom_vector vector(20);
-
--- Create HNSW index for fast similarity search
-CREATE INDEX ON pcb_features 
-USING hnsw (pcb_vector vector_cosine_ops);
-
--- Similarity query (< 50ms)
-SELECT model_id, 1 - (pcb_vector <=> query_vector) as similarity
-FROM pcb_features
-ORDER BY pcb_vector <=> query_vector
-LIMIT 5;
+                    │ model_id(FK) │  │ id (PK)      │
+                    │ station_code │──│ code         │
+                    │ board_type   │  │ name         │
+                    │ sequence     │  │ category     │
+                    │ cycle_time   │  │ cycle_time   │
+                    │ manpower     │  │ operator_ratio│
+                    └──────────────┘  └──────┬───────┘
+                                             │
+                                      ┌──────┴───────┐
+                                      │station_alias │
+                                      │──────────────│
+                                      │ master_id(FK)│
+                                      │ alias_name   │
+                                      │ customer_id  │
+                                      └──────────────┘
 ```
 
 ### Current Data Statistics
@@ -547,182 +741,46 @@ LIMIT 5;
 | `station_aliases` | 257 | Customer-specific naming variations |
 | `models` | 784 | Historical product models |
 | `model_stations` | 6,189 | Model-to-station mappings |
-| `pcb_features` | 0* | PCB geometric data |
-| `bom_data` | 0* | BOM component data |
-
-*To be populated from historical records
+| `knowledge_base` | 3 | RAG documents (EMS Guide, MP Formulas) |
 
 ---
 
 ## 🛠️ Tech Stack
 
 ### Frontend
-
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| **Next.js** | 15.x | React framework with App Router |
-| **TypeScript** | 5.x | Type-safe development |
-| **Tailwind CSS** | 3.x | Utility-first styling |
-| **shadcn/ui** | Latest | UI component library |
-| **Lucide Icons** | Latest | Icon library |
-| **React Hook Form** | 7.x | Form management |
-| **Zod** | 3.x | Schema validation |
-
-### Backend
-
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| **Next.js API Routes** | 15.x | Serverless API endpoints |
-| **Supabase** | Latest | PostgreSQL + Auth + Storage |
-| **pgvector** | 0.7.x | Vector similarity search |
-| **ExcelJS** | 4.x | Excel file parsing |
-| **pdf-parse** | 1.x | PDF text extraction |
-
-### AI/ML
-
 | Technology | Purpose |
 |------------|---------|
-| **Gemini 2.0 Flash** | Primary LLM (parsing, explanation) |
+| **Next.js 15** | React framework with App Router |
+| **TypeScript** | Type-safe development |
+| **Tailwind CSS** | Utility-first styling |
+| **shadcn/ui** | UI component library |
+| **React Query** | Data fetching & caching |
+| **Framer Motion** | Animations |
+
+### Backend
+| Technology | Purpose |
+|------------|---------|
+| **Next.js API Routes** | Serverless API endpoints |
+| **Supabase** | PostgreSQL + Auth + Storage |
+| **pgvector** | Vector similarity search |
+
+### AI/ML
+| Technology | Purpose |
+|------------|---------|
+| **Gemini 2.0 Flash** | Primary LLM (1M context) |
 | **Llama 3.3 70B** | Fallback LLM via OpenRouter |
-| **pgvector** | Vector similarity computation |
-| **Custom algorithms** | Feature extraction, inference rules |
-
-### Infrastructure
-
-| Service | Purpose |
-|---------|---------|
-| **Vercel** | Frontend hosting & serverless |
-| **Supabase Cloud** | Database & authentication |
-| **Google AI Studio** | Gemini API access |
-| **OpenRouter** | LLM API gateway (fallback) |
-
----
-
-## 📁 Project Structure
-
-```
-RFQ_AI_SYSTEM/
-├── 📂 app/                          # Next.js App Router
-│   ├── 📂 (auth)/                   # Auth pages (login, register)
-│   ├── 📂 (dashboard)/              # Protected dashboard pages
-│   │   ├── 📂 customers/            # Customer management
-│   │   ├── 📂 models/               # Model/product management
-│   │   ├── 📂 stations/             # Station configuration
-│   │   ├── 📂 rfq/                  # RFQ processing
-│   │   │   ├── 📂 new/              # New RFQ wizard
-│   │   │   └── 📂 [id]/             # RFQ details & results
-│   │   └── page.tsx                 # Dashboard home
-│   ├── 📂 api/                      # API routes
-│   │   ├── 📂 rfq/                  # RFQ endpoints
-│   │   ├── 📂 similarity/           # Similarity search
-│   │   ├── 📂 parse/                # File parsing
-│   │   └── 📂 explain/              # LLM explanation
-│   └── layout.tsx                   # Root layout
-│
-├── 📂 components/                   # React components
-│   ├── 📂 ui/                       # shadcn/ui components
-│   ├── 📂 forms/                    # Form components
-│   ├── 📂 tables/                   # Data tables
-│   └── 📂 charts/                   # Visualization
-│
-├── 📂 lib/                          # Core libraries
-│   ├── 📂 api/                      # API client functions
-│   │   ├── customers.ts
-│   │   ├── models.ts
-│   │   └── stations.ts
-│   │
-│   ├── 📂 similarity/               # Similarity Engine
-│   │   ├── pcb-features.ts          # PCB vector generation
-│   │   ├── bom-features.ts          # BOM vector generation
-│   │   ├── vector-search.ts         # pgvector queries
-│   │   ├── station-inference.ts     # Rule-based inference
-│   │   └── index.ts
-│   │
-│   ├── 📂 parsers/                  # File Parsers
-│   │   ├── excel-parser.ts          # BOM Excel parsing
-│   │   ├── pdf-parser.ts            # PDF extraction
-│   │   ├── validators.ts            # Data validation
-│   │   └── index.ts
-│   │
-│   ├── 📂 cost/                     # Cost Engine
-│   │   ├── material-calc.ts         # Material costs
-│   │   ├── process-calc.ts          # Process costs
-│   │   ├── labor-calc.ts            # Labor costs
-│   │   ├── test-calc.ts             # Test station costs
-│   │   └── index.ts
-│   │
-│   ├── 📂 llm/                      # LLM Integration
-│   │   ├── config.ts                # Model configuration
-│   │   ├── gemini-client.ts         # Google AI client
-│   │   ├── openrouter-client.ts     # Fallback client
-│   │   ├── client.ts                # Unified client
-│   │   └── 📂 prompts/              # Prompt templates
-│   │       ├── bom-parser.ts
-│   │       ├── pdf-extractor.ts
-│   │       ├── explainer.ts
-│   │       └── suggester.ts
-│   │
-│   ├── 📂 supabase/                 # Supabase client
-│   │   ├── client.ts
-│   │   ├── server.ts
-│   │   └── middleware.ts
-│   │
-│   └── utils.ts                     # Utility functions
-│
-├── 📂 types/                        # TypeScript types
-│   ├── database.ts                  # DB schema types
-│   ├── rfq.ts                       # RFQ types
-│   └── api.ts                       # API types
-│
-├── 📂 .claude/                      # Claude Code prompts
-│   └── 📂 Prompts/                  # Development phases
-│       ├── README.md
-│       ├── LLM_INTEGRATION.md
-│       ├── PHASE_0_FIX_UI_BUGS.md
-│       ├── PHASE_1_DATABASE_SCHEMA.md
-│       ├── PHASE_2_SIMILARITY_ENGINE.md
-│       ├── PHASE_3_FILE_PARSERS.md
-│       ├── PHASE_4_COST_ENGINE.md
-│       └── PHASE_5_INTEGRATION.md
-│
-├── 📄 .env.local                    # Environment variables
-├── 📄 package.json
-├── 📄 tsconfig.json
-├── 📄 tailwind.config.js
-└── 📄 README.md                     # This file
-```
+| **RAG Pipeline** | Knowledge retrieval |
+| **Function Calling** | Tool execution |
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-
 - Node.js 18.x or later
-- npm or yarn
 - Supabase account
-- Google AI Studio API key (for Gemini)
-- OpenRouter API key (optional, for fallback)
-
-### Environment Setup
-
-Create `.env.local` in project root:
-
-```env
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-
-# LLM - Primary
-GEMINI_API_KEY=your-gemini-api-key
-
-# LLM - Fallback (optional)
-OPENROUTER_API_KEY=your-openrouter-key
-
-# App
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-```
+- Google AI Studio API key (Gemini)
+- OpenRouter API key (optional fallback)
 
 ### Installation
 
@@ -734,143 +792,56 @@ cd rfq-ai-system
 # Install dependencies
 npm install
 
-# Run database migrations (in Supabase SQL Editor)
-# See .claude/Prompts/PHASE_1_DATABASE_SCHEMA.md
-
-# Seed master data
-# See .claude/Prompts/MIGRATION_SEED_MODELS.sql
+# Setup environment
+cp .env.example .env.local
+# Edit .env.local with your API keys
 
 # Start development server
 npm run dev
 ```
 
 ### Access Application
-
-- **Local**: http://localhost:3000
 - **Dashboard**: http://localhost:3000/dashboard
-- **New RFQ**: http://localhost:3000/rfq/new
-
----
-
-## 📡 API Reference
-
-### RFQ Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/rfq` | Create new RFQ request |
-| `GET` | `/api/rfq/[id]` | Get RFQ details |
-| `POST` | `/api/rfq/[id]/process` | Process RFQ (full analysis) |
-| `GET` | `/api/rfq/[id]/results` | Get analysis results |
-
-### Similarity Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/similarity/search` | Find similar models |
-| `POST` | `/api/similarity/pcb` | PCB-only similarity |
-| `POST` | `/api/similarity/bom` | BOM-only similarity |
-
-### Parse Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/parse/bom` | Parse BOM Excel file |
-| `POST` | `/api/parse/pdf` | Extract from PDF |
-| `POST` | `/api/parse/validate` | Validate parsed data |
-
-### Explain Endpoint
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/explain` | Generate LLM explanation |
+- **AI Chat**: http://localhost:3000/chat
 
 ---
 
 ## 📈 Development Roadmap
 
-### Phase 1: Database Schema ✅
-- [x] Core tables (customers, models, stations)
-- [x] Master-alias pattern for stations
-- [x] Historical data import (6,000+ records)
-- [x] pgvector extension setup
+### Completed ✅
+- [x] Database schema & seed data (784 models, 6,189 stations)
+- [x] Similarity engine with Jaccard matching
+- [x] AI Agent with 4 tools
+- [x] RAG knowledge base integration
+- [x] Multilingual support (ID/EN/中文)
+- [x] Image upload processing
+- [x] React Query caching
 
-### Phase 2: Similarity Engine ✅
-- [x] PCB feature extraction
-- [x] BOM feature extraction
-- [x] Vector similarity search
-- [x] Station inference rules
-
-### Phase 3: File Parsers 🔄
+### In Progress 🔄
+- [ ] PDF spec extraction
 - [ ] Excel BOM parser
-- [ ] PDF extractor
-- [ ] LLM fallback parsing
-- [ ] Validation layer
+- [ ] Cost engine integration
 
-### Phase 4: Cost Engine ⏳
-- [ ] Material cost calculator
-- [ ] Process cost calculator
-- [ ] Labor cost calculator
-- [ ] Test cost calculator
-
-### Phase 5: Integration ⏳
-- [ ] Full RFQ workflow
-- [ ] LLM explanations
-- [ ] Results dashboard
-- [ ] Export functionality
-
-### Phase 6: Advanced Features 📋
+### Planned 📋
+- [ ] Voice input support
 - [ ] Batch RFQ processing
 - [ ] Historical trend analysis
-- [ ] Cost optimization suggestions
-- [ ] Supplier integration
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our contributing guidelines.
-
-### Development Workflow
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
-
-### Code Style
-
-- Use TypeScript strict mode
-- Follow ESLint configuration
-- Write meaningful commit messages
-- Add tests for new features
+- [ ] Export to Excel/PDF
 
 ---
 
 ## 📄 License
 
-This project is proprietary software developed for EMS manufacturing operations.
+Proprietary software developed for EMS manufacturing operations.
 
 ---
 
 ## 👥 Team
 
 **Marlin Booking** - EMS Manufacturing Solutions
-
 - Founded: 2016
+- Location: Batam, Indonesia
 - Expertise: Electronics Manufacturing Services
-- Location: Indonesia
-
----
-
-## 📞 Support
-
-For questions or support:
-
-- 📧 Email: support@marlinbooking.com
-- 📖 Documentation: [docs.rfq-ai.com](https://docs.rfq-ai.com)
-- 🐛 Issues: [GitHub Issues](https://github.com/your-org/rfq-ai-system/issues)
 
 ---
 
@@ -880,4 +851,11 @@ For questions or support:
 
 <p align="center">
   <sub>Transforming RFQ processing with AI-powered automation</sub>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/AI-Agentic_RAG-red" alt="Agentic RAG" />
+  <img src="https://img.shields.io/badge/LLM-Gemini_2.0-orange" alt="Gemini" />
+  <img src="https://img.shields.io/badge/Database-784_Models-green" alt="Models" />
+  <img src="https://img.shields.io/badge/Stations-6,189_Records-blue" alt="Stations" />
 </p>

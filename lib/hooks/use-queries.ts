@@ -82,18 +82,19 @@ interface ModelsListParams {
   status?: string;
 }
 
+// ✅ FIXED: Now properly fetches MP and UPH data
 export function useModelsList(params: ModelsListParams = {}) {
   const { page = 1, pageSize = 18, search, customer, status } = params;
   
   return useQuery({
     queryKey: queryKeys.modelsList({ page, search, customer, status }),
     queryFn: async () => {
+      // Step 1: Get models with basic info
       let query = supabase
         .from('models')
         .select(`
           id, code, name, status, board_types, created_at,
-          customer:customers(id, code, name),
-          model_stations(id)
+          customer:customers(id, code, name)
         `, { count: 'exact' });
       
       if (search) {
@@ -117,11 +118,71 @@ export function useModelsList(params: ModelsListParams = {}) {
       
       if (error) throw error;
       
-      return {
-        data: data?.map(m => ({
+      // Step 2: Get stations for these models with manpower and machine UPH
+      const modelIds = data?.map(m => m.id) || [];
+      
+      if (modelIds.length === 0) {
+        return {
+          data: [],
+          total: 0,
+          page,
+          pageSize,
+          totalPages: 0,
+        };
+      }
+      
+      const { data: stationsData } = await supabase
+        .from('model_stations')
+        .select(`
+          model_id,
+          manpower,
+          machine_id
+        `)
+        .in('model_id', modelIds);
+      
+      // Step 3: Get UPH data for machines
+      const machineIds = [...new Set(stationsData?.map(s => s.machine_id).filter(Boolean) || [])];
+      
+      let machineUphMap = new Map<string, number>();
+      
+      if (machineIds.length > 0) {
+        const { data: machinesData } = await supabase
+          .from('station_master')
+          .select('id, typical_uph')
+          .in('id', machineIds);
+        
+        machinesData?.forEach(m => {
+          machineUphMap.set(m.id, m.typical_uph || 0);
+        });
+      }
+      
+      // Step 4: Aggregate per model
+      const aggregates = new Map<string, { count: number; manpower: number; minUph: number }>();
+      
+      stationsData?.forEach(s => {
+        const existing = aggregates.get(s.model_id) || { count: 0, manpower: 0, minUph: Infinity };
+        const machineUph = machineUphMap.get(s.machine_id) || Infinity;
+        
+        aggregates.set(s.model_id, {
+          count: existing.count + 1,
+          manpower: existing.manpower + (Number(s.manpower) || 0),
+          minUph: Math.min(existing.minUph, machineUph),
+        });
+      });
+      
+      // Step 5: Combine data
+      const modelsWithStats = (data || []).map(m => {
+        const agg = aggregates.get(m.id) || { count: 0, manpower: 0, minUph: 0 };
+        return {
           ...m,
-          stationCount: (m.model_stations as any[])?.length || 0,
-        })) || [],
+          station_count: agg.count,
+          total_manpower: agg.manpower,
+          min_uph: agg.minUph === Infinity ? 0 : agg.minUph,
+        };
+      });
+      
+      return {
+        data: modelsWithStats,
         total: count || 0,
         page,
         pageSize,
