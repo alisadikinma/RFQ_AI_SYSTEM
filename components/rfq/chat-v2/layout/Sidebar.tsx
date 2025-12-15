@@ -4,9 +4,11 @@ import { useChatHistory, ChatSession } from "@/hooks/useChatHistory";
 import { NewChatButton } from "./NewChatButton";
 import { ChatHistoryItem } from "./ChatHistoryItem";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Loader2 } from "lucide-react";
+import { X, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useMemo } from "react";
+import { AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 
 interface SidebarProps {
   currentChatId: string | null;
@@ -49,11 +51,31 @@ export function Sidebar({ currentChatId, onSelectChat, onNewChat, onClose }: Sid
     return groups;
   }, [sessions]);
 
+  const handleDeleteChat = async (sessionId: string) => {
+    try {
+      await deleteSession(sessionId);
+      toast.success("Chat berhasil dihapus");
+      
+      // If deleted chat is current, go to new chat
+      if (sessionId === currentChatId) {
+        onNewChat();
+      }
+    } catch (error) {
+      console.error("Failed to delete:", error);
+      toast.error("Gagal menghapus chat");
+    }
+  };
+
+  const totalChats = sessions.length;
+
   return (
     <div className="flex flex-col h-full bg-zinc-950 border-r border-zinc-800">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-zinc-800">
-        <h2 className="text-lg font-semibold text-white">RFQ AI</h2>
+        <div>
+          <h2 className="text-lg font-semibold text-white">RFQ AI</h2>
+          <p className="text-xs text-zinc-500">{totalChats} chat</p>
+        </div>
         <Button
           variant="ghost"
           size="icon"
@@ -70,10 +92,18 @@ export function Sidebar({ currentChatId, onSelectChat, onNewChat, onClose }: Sid
       </div>
 
       {/* Chat History */}
-      <ScrollArea className="flex-1 px-3">
+      <ScrollArea className="flex-1 pl-2 pr-1">
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+          </div>
+        ) : totalChats === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
+            <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mb-3">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <p className="text-sm">Belum ada chat</p>
+            <p className="text-xs mt-1">Mulai chat baru untuk memulai</p>
           </div>
         ) : (
           Object.entries(groupedSessions).map(([group, items]) =>
@@ -82,16 +112,18 @@ export function Sidebar({ currentChatId, onSelectChat, onNewChat, onClose }: Sid
                 <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2 px-2">
                   {group}
                 </h3>
-                <div className="space-y-1">
-                  {items.map((session) => (
-                    <ChatHistoryItem
-                      key={session.id}
-                      chat={session}
-                      isActive={session.id === currentChatId}
-                      onClick={() => onSelectChat(session.id)}
-                      onDelete={() => deleteSession(session.id)}
-                    />
-                  ))}
+                <div className="space-y-0.5">
+                  <AnimatePresence mode="popLayout">
+                    {items.map((session) => (
+                      <ChatHistoryItem
+                        key={session.id}
+                        chat={session}
+                        isActive={session.id === currentChatId}
+                        onClick={() => onSelectChat(session.id)}
+                        onDelete={() => handleDeleteChat(session.id)}
+                      />
+                    ))}
+                  </AnimatePresence>
                 </div>
               </div>
             ) : null

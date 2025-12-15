@@ -1,6 +1,6 @@
 "use client";
 
-import { ChatMessage } from "@/hooks/useChatHistory";
+import { ChatMessage, AdditionalProcessData } from "@/hooks/useChatHistory";
 import { MessageBubble } from "./MessageBubble";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ChatInputArea } from "../input/ChatInputArea";
@@ -17,6 +17,7 @@ interface MessageListProps {
   onStationsChange?: (stations: ExtractedStation[]) => void;
   onFindSimilar?: (stations: ExtractedStation[]) => void;
   onSelectModel?: (model: SimilarModel) => void;
+  onProcessComplete?: (data: AdditionalProcessData) => void;
 }
 
 export function MessageList({
@@ -26,7 +27,8 @@ export function MessageList({
   messagesEndRef,
   onStationsChange,
   onFindSimilar,
-  onSelectModel
+  onSelectModel,
+  onProcessComplete
 }: MessageListProps) {
   return (
     <div className="flex-1 flex flex-col h-full">
@@ -40,6 +42,7 @@ export function MessageList({
               onStationsChange={onStationsChange}
               onFindSimilar={onFindSimilar}
               onSelectModel={onSelectModel}
+              onProcessComplete={onProcessComplete}
             />
           ))}
 

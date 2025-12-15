@@ -1,7 +1,7 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { Bell, Menu, Moon, Sun, ChevronDown, LogOut, User as UserIcon } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import { useAuth } from '@/lib/supabase/auth-provider';
 import { signOut } from '@/lib/supabase/auth';
@@ -27,6 +27,12 @@ export function Header({ onMenuClick, breadcrumbs }: HeaderProps) {
   const { theme, setTheme } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+
+  // Avoid hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleSignOut = async () => {
     try {
@@ -81,17 +87,16 @@ export function Header({ onMenuClick, breadcrumbs }: HeaderProps) {
             size="icon"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           >
-            <motion.div
-              initial={{ rotate: 0 }}
-              animate={{ rotate: theme === 'dark' ? 180 : 0 }}
-              transition={{ duration: 0.3 }}
-            >
-              {theme === 'dark' ? (
+            {/* Only render after mount to avoid hydration mismatch */}
+            {mounted ? (
+              theme === 'dark' ? (
                 <Sun className="w-5 h-5" />
               ) : (
                 <Moon className="w-5 h-5" />
-              )}
-            </motion.div>
+              )
+            ) : (
+              <div className="w-5 h-5" />
+            )}
           </Button>
 
           <DropdownMenu>

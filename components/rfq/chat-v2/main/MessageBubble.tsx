@@ -1,12 +1,14 @@
 "use client";
 
-import { ChatMessage } from "@/hooks/useChatHistory";
+import { ChatMessage, AdditionalProcessData } from "@/hooks/useChatHistory";
 import { User, Bot } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ExtractedDataTable, ExtractedStation } from "../results/ExtractedDataTable";
 import { SimilarModelCards } from "../results/SimilarModelCards";
 import { SimilarModel } from "../results/ModelCard";
+import { QuickProcessForm } from "../../QuickProcessForm";
+import { InvestmentSummaryReport } from "../../InvestmentSummaryReport";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -15,6 +17,7 @@ interface MessageBubbleProps {
   onStationsChange?: (stations: ExtractedStation[]) => void;
   onFindSimilar?: (stations: ExtractedStation[]) => void;
   onSelectModel?: (model: SimilarModel) => void;
+  onProcessComplete?: (data: AdditionalProcessData) => void;
 }
 
 // Custom Markdown components for beautiful rendering
@@ -142,10 +145,11 @@ export function MessageBubble({
   message,
   onStationsChange,
   onFindSimilar,
-  onSelectModel
+  onSelectModel,
+  onProcessComplete
 }: MessageBubbleProps) {
   const isUser = message.role === "user";
-  const hasResults = message.extractedStations || message.similarModels;
+  const hasResults = message.extractedStations || message.similarModels || message.showProcessForm || message.showInvestmentReport;
 
   return (
     <motion.div
@@ -233,6 +237,26 @@ export function MessageBubble({
             <SimilarModelCards
               models={message.similarModels}
               onSelectModel={onSelectModel || (() => {})}
+            />
+          </div>
+        )}
+
+        {/* Additional Process Form */}
+        {message.showProcessForm && onProcessComplete && (
+          <div className="mt-4">
+            <QuickProcessForm onComplete={onProcessComplete} />
+          </div>
+        )}
+
+        {/* Investment Summary Report */}
+        {message.showInvestmentReport && message.additionalProcessData && (
+          <div className="mt-4">
+            <InvestmentSummaryReport
+              selections={message.additionalProcessData.selections}
+              totalManpower={message.additionalProcessData.totalManpower}
+              totalInvestment={message.additionalProcessData.totalInvestment}
+              monthlyLaborCost={message.additionalProcessData.monthlyLaborCost}
+              referenceModel={message.referenceModel}
             />
           </div>
         )}

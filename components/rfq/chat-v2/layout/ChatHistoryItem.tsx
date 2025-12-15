@@ -1,16 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import { ChatSession } from "@/hooks/useChatHistory";
-import { MessageSquare, Trash2, MoreHorizontal } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { MessageSquare, X } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
 
 interface ChatHistoryItemProps {
   chat: ChatSession;
@@ -20,52 +23,75 @@ interface ChatHistoryItemProps {
 }
 
 export function ChatHistoryItem({ chat, isActive, onClick, onDelete }: ChatHistoryItemProps) {
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setIsDeleting(true);
+    try {
+      await onDelete();
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteDialog(false);
+    }
+  };
+
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      className={cn(
-        "group flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors",
-        isActive
-          ? "bg-zinc-800 text-white"
-          : "text-zinc-400 hover:bg-zinc-800/50 hover:text-white"
-      )}
-      onClick={onClick}
-    >
-      <MessageSquare className="h-4 w-4 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm truncate">{chat.title}</p>
-        {chat.preview && (
-          <p className="text-xs text-zinc-500 truncate">{chat.preview}</p>
+    <>
+      <div
+        className={cn(
+          "flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors",
+          isActive
+            ? "bg-zinc-800 text-white"
+            : "text-zinc-400 hover:bg-zinc-800/50 hover:text-white"
         )}
+        onClick={onClick}
+      >
+        {/* Delete Button - LEFT SIDE */}
+        <button
+          type="button"
+          className="flex-shrink-0 p-1 rounded text-zinc-600 hover:text-red-400 hover:bg-red-900/30"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowDeleteDialog(true);
+          }}
+          title="Hapus"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <MessageSquare className="h-4 w-4 flex-shrink-0" />
+        
+        <span className="flex-1 text-sm truncate">
+          {chat.title}
+        </span>
       </div>
 
-      {/* Context Menu */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-32">
-          <DropdownMenuItem
-            className="text-red-500 focus:text-red-500"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Hapus
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </motion.div>
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent className="bg-zinc-900 border-zinc-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Hapus Chat?</AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              Chat ini akan dihapus permanen.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              className="bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
+              disabled={isDeleting}
+            >
+              Batal
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white border-0"
+              onClick={handleDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "..." : "Hapus"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

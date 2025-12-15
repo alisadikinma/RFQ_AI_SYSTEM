@@ -12,6 +12,13 @@ export interface CostSummary {
   confidence: number;
 }
 
+export interface AdditionalProcessData {
+  selections: Record<string, boolean | string>;
+  totalManpower: number;
+  totalInvestment: number;
+  monthlyLaborCost: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -23,6 +30,19 @@ export interface ChatMessage {
   extractedStations?: ExtractedStation[];
   similarModels?: SimilarModel[];
   costSummary?: CostSummary;
+  // For additional process form (Phase 8)
+  showProcessForm?: boolean;
+  additionalProcessData?: AdditionalProcessData;
+  selectedModelId?: string;
+  // For investment report display
+  showInvestmentReport?: boolean;
+  referenceModel?: {
+    code: string;
+    customer: string;
+    similarity: number;
+    totalStations: number;
+    totalManpower: number;
+  };
 }
 
 export interface ChatSession {

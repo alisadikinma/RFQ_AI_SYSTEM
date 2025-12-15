@@ -2,7 +2,6 @@
 
 import { useChatHistory, ChatSession } from "@/hooks/useChatHistory";
 import { ChatHistoryItem } from "./ChatHistoryItem";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2 } from "lucide-react";
 import { useMemo } from "react";
 import { useParams } from "next/navigation";
@@ -60,8 +59,12 @@ export function ChatHistorySection() {
   }
 
   return (
-    <ScrollArea className="flex-1">
-      <div className="space-y-4 pr-2">
+    <div 
+      className="flex-1 overflow-y-auto pr-1"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+    >
+      <style jsx>{`div::-webkit-scrollbar { display: none; }`}</style>
+      <div className="space-y-4">
         {Object.entries(groupedSessions).map(([group, items]) =>
           items.length > 0 ? (
             <div key={group}>
@@ -82,6 +85,6 @@ export function ChatHistorySection() {
           ) : null
         )}
       </div>
-    </ScrollArea>
+    </div>
   );
 }

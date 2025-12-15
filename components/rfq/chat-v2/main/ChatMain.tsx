@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { MessageList } from "./MessageList";
-import { useChatHistory, ChatMessage } from "@/hooks/useChatHistory";
+import { useChatHistory, ChatMessage, AdditionalProcessData } from "@/hooks/useChatHistory";
 import { ProcessingOverlay } from "../loading/ProcessingOverlay";
 import { ModelDetailModal } from "../results/ModelDetailModal";
 import { DEFAULT_PROCESSING_STEPS } from "@/lib/constants/processing-steps";
@@ -326,8 +326,50 @@ export function ChatMain({ chatId }: ChatMainProps) {
   };
 
   const handleSelectModel = (model: SimilarModel) => {
-    // Open model detail page in new tab
-    window.open(`/models/${model.id}`, '_blank');
+    // Store selected model and show process form
+    setSelectedModel(model);
+    
+    // Add message with process form
+    const processFormMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: `✅ Model **${model.customerName} - ${model.code}** dipilih sebagai referensi (${model.similarity}% similarity).\n\nSebelum menghitung investasi, mohon jawab pertanyaan berikut tentang proses tambahan yang diperlukan:`,
+      timestamp: new Date(),
+      sequence: messages.length + 1,
+      showProcessForm: true,
+      selectedModelId: model.id,
+    };
+    setMessages(prev => [...prev, processFormMessage]);
+  };
+
+  const handleProcessComplete = async (data: AdditionalProcessData) => {
+    // Create report message with InvestmentSummaryReport component
+    const reportMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "", // Content handled by component
+      timestamp: new Date(),
+      sequence: messages.length + 1,
+      showInvestmentReport: true,
+      additionalProcessData: data,
+      referenceModel: selectedModel ? {
+        code: selectedModel.code,
+        customer: selectedModel.customerName || selectedModel.customerCode || '',
+        similarity: selectedModel.similarity,
+        totalStations: selectedModel.totalStations,
+        totalManpower: selectedModel.totalManpower,
+      } : undefined,
+    };
+    setMessages(prev => [...prev, reportMessage]);
+    
+    // Save summary to database if chat exists
+    if (chatId) {
+      const summaryText = `Investment Report - Total Investment: USD ${data.totalInvestment.toLocaleString()}, Manpower: ${data.totalManpower.toFixed(1)} MP, Monthly Labor: Rp ${data.monthlyLaborCost.toLocaleString('id-ID')}`;
+      await addMessage(chatId, {
+        role: "assistant",
+        content: summaryText,
+      });
+    }
   };
 
   const handleUseModel = (model: SimilarModel) => {
@@ -366,6 +408,7 @@ export function ChatMain({ chatId }: ChatMainProps) {
         onStationsChange={handleStationsChange}
         onFindSimilar={handleFindSimilar}
         onSelectModel={handleSelectModel}
+        onProcessComplete={handleProcessComplete}
       />
 
       <ModelDetailModal

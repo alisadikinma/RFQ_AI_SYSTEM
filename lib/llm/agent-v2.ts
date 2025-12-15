@@ -460,26 +460,51 @@ async function callOpenRouterWithTools(
     
     // Add timeout to prevent hanging
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // Increased to 45s
     
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
-        'X-Title': 'RFQ AI System',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    let response: Response;
+    
+    try {
+      console.log('📡 Calling OpenRouter API...');
+      response = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+          'X-Title': 'RFQ AI System',
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error('❌ Fetch error:', fetchError);
+      
+      if (fetchError instanceof Error) {
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Request timeout (45s). Server OpenRouter mungkin lambat.');
+        }
+        // Network error - provide more details
+        throw new Error(`Network error: ${fetchError.message}. Cek koneksi internet.`);
+      }
+      throw new Error('Failed to connect to AI server');
+    }
     
     clearTimeout(timeoutId);
     
     if (!response.ok) {
-      const error = await response.text();
-      console.error('OpenRouter API error:', response.status, error);
-      throw new Error(`OpenRouter API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('❌ OpenRouter API error:', response.status, errorText);
+      
+      if (response.status === 401) {
+        throw new Error('API key invalid. Cek OPENROUTER_API_KEY.');
+      } else if (response.status === 429) {
+        throw new Error('Rate limit exceeded. Coba lagi dalam beberapa menit.');
+      } else if (response.status === 503) {
+        throw new Error('OpenRouter service unavailable. Coba lagi nanti.');
+      }
+      throw new Error(`API error ${response.status}: ${errorText.slice(0, 100)}`);
     }
     
     const data = await response.json();
