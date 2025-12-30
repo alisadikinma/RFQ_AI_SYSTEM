@@ -1,0 +1,93 @@
+## PRIMARY KEY statements
+
+ALTER TABLE additional_processes ADD PRIMARY KEY (id);
+ALTER TABLE board_types ADD PRIMARY KEY (id);
+ALTER TABLE bom_data ADD PRIMARY KEY (id);   
+ALTER TABLE chat_messages ADD PRIMARY KEY (id);       
+ALTER TABLE chat_sessions ADD PRIMARY KEY (id);       
+ALTER TABLE customers ADD PRIMARY KEY (id);  
+ALTER TABLE knowledge_chunks ADD PRIMARY KEY (id);    
+ALTER TABLE model_costs ADD PRIMARY KEY (id);
+ALTER TABLE model_groups ADD PRIMARY KEY (id);        
+ALTER TABLE model_stations ADD PRIMARY KEY (id);      
+ALTER TABLE models ADD PRIMARY KEY (id);     
+ALTER TABLE pcb_features ADD PRIMARY KEY (id);        
+ALTER TABLE rfq_requests ADD PRIMARY KEY (id);        
+ALTER TABLE rfq_results ADD PRIMARY KEY (id);
+ALTER TABLE rfq_stations ADD PRIMARY KEY (id);        
+ALTER TABLE station_aliases ADD PRIMARY KEY (id);     
+ALTER TABLE station_data_staging ADD PRIMARY KEY (id);
+ALTER TABLE station_master ADD PRIMARY KEY (id);      
+
+## FOREIGN KEY statements
+
+ALTER TABLE bom_data ADD CONSTRAINT bom_data_model_id_fkey FOREIGN KEY (model_id) REFERENCES models(id);
+ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_session_id_fkey FOREIGN KEY (session_id) REFERENCES chat_sessions(id);
+ALTER TABLE model_costs ADD CONSTRAINT model_costs_model_id_fkey FOREIGN KEY (model_id) REFERENCES models(id);
+ALTER TABLE model_groups ADD CONSTRAINT model_groups_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id);
+ALTER TABLE model_stations ADD CONSTRAINT model_stations_model_id_fkey FOREIGN KEY (model_id) REFERENCES models(id);
+ALTER TABLE model_stations ADD CONSTRAINT model_stations_machine_id_fkey FOREIGN KEY (machine_id) REFERENCES station_master(id);
+ALTER TABLE models ADD CONSTRAINT models_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id);
+ALTER TABLE models ADD CONSTRAINT models_group_id_fkey FOREIGN KEY (group_id) REFERENCES model_groups(id);
+ALTER TABLE pcb_features ADD CONSTRAINT pcb_features_model_id_fkey FOREIGN KEY (model_id) REFERENCES models(id);
+ALTER TABLE rfq_requests ADD CONSTRAINT rfq_requests_reference_model_id_fkey FOREIGN KEY (reference_model_id) REFERENCES models(id);
+ALTER TABLE rfq_requests ADD CONSTRAINT rfq_requests_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id);
+ALTER TABLE rfq_results ADD CONSTRAINT rfq_results_matched_model_id_fkey FOREIGN KEY (matched_model_id) REFERENCES models(id);
+ALTER TABLE rfq_results ADD CONSTRAINT rfq_results_rfq_id_fkey FOREIGN KEY (rfq_id) REFERENCES rfq_requests(id);
+ALTER TABLE rfq_stations ADD CONSTRAINT rfq_stations_rfq_id_fkey FOREIGN KEY (rfq_id) REFERENCES rfq_requests(id);
+ALTER TABLE station_aliases ADD CONSTRAINT station_aliases_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES customers(id);
+ALTER TABLE station_aliases ADD CONSTRAINT station_aliases_master_station_id_fkey FOREIGN KEY (master_station_id) REFERENCES station_master(id);
+
+## INDEX statements
+
+CREATE UNIQUE INDEX additional_processes_code_key ON public.additional_processes USING btree (code);
+CREATE UNIQUE INDEX additional_processes_pkey ON public.additional_processes USING btree (id);
+CREATE UNIQUE INDEX board_types_code_key ON public.board_types USING btree (code);
+CREATE UNIQUE INDEX board_types_pkey ON public.board_types USING btree (id);
+CREATE UNIQUE INDEX bom_data_model_id_board_type_key ON public.bom_data USING btree (model_id, board_type);
+CREATE UNIQUE INDEX bom_data_pkey ON public.bom_data USING btree (id);                                                                              
+CREATE INDEX idx_bom_data_model ON public.bom_data USING btree (model_id);                                                                        
+CREATE UNIQUE INDEX chat_messages_pkey ON public.chat_messages USING btree (id);
+CREATE INDEX idx_chat_messages_session_id ON public.chat_messages USING btree (session_id);
+CREATE UNIQUE INDEX chat_sessions_pkey ON public.chat_sessions USING btree (id);
+CREATE INDEX idx_chat_sessions_updated_at ON public.chat_sessions USING btree (updated_at DESC);
+CREATE INDEX idx_chat_sessions_user_id ON public.chat_sessions USING btree (user_id);
+CREATE UNIQUE INDEX customers_code_key ON public.customers USING btree (code);
+CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id);
+CREATE INDEX knowledge_chunks_content_idx ON public.knowledge_chunks USING gin (to_tsvector('english'::regconfig, content));
+CREATE INDEX knowledge_chunks_embedding_idx ON public.knowledge_chunks USING hnsw (embedding vector_cosine_ops) WITH (m='16', ef_construction='64');
+CREATE UNIQUE INDEX knowledge_chunks_pkey ON public.knowledge_chunks USING btree (id);
+CREATE INDEX knowledge_chunks_source_idx ON public.knowledge_chunks USING btree (source_file);
+CREATE INDEX idx_model_costs_model ON public.model_costs USING btree (model_id);
+CREATE UNIQUE INDEX model_costs_pkey ON public.model_costs USING btree (id);
+CREATE INDEX idx_model_groups_customer ON public.model_groups USING btree (customer_id);
+CREATE INDEX idx_model_groups_type_model ON public.model_groups USING btree (type_model);
+CREATE UNIQUE INDEX model_groups_pkey ON public.model_groups USING btree (id);
+CREATE UNIQUE INDEX unique_customer_type_model ON public.model_groups USING btree (customer_id, type_model);
+CREATE INDEX idx_model_stations_machine_id ON public.model_stations USING btree (machine_id);
+CREATE INDEX idx_model_stations_model_id ON public.model_stations USING btree (model_id);
+CREATE UNIQUE INDEX model_stations_pkey ON public.model_stations USING btree (id);
+CREATE INDEX idx_models_board_type ON public.models USING btree (board_type);                                                                      
+CREATE INDEX idx_models_customer_id ON public.models USING btree (customer_id);                                                                     
+CREATE INDEX idx_models_group_id ON public.models USING btree (group_id);                                                                        
+CREATE UNIQUE INDEX models_code_key ON public.models USING btree (code);                                                                            
+CREATE UNIQUE INDEX models_pkey ON public.models USING btree (id);                                                                              
+CREATE INDEX idx_pcb_features_model ON public.pcb_features USING btree (model_id);
+CREATE UNIQUE INDEX pcb_features_model_id_board_type_key ON public.pcb_features USING btree (model_id, board_type);
+CREATE UNIQUE INDEX pcb_features_pkey ON public.pcb_features USING btree (id);
+CREATE INDEX idx_rfq_requests_customer ON public.rfq_requests USING btree (customer_id);
+CREATE INDEX idx_rfq_requests_status ON public.rfq_requests USING btree (status);
+CREATE UNIQUE INDEX rfq_requests_pkey ON public.rfq_requests USING btree (id);
+CREATE INDEX idx_rfq_results_rfq ON public.rfq_results USING btree (rfq_id);
+CREATE UNIQUE INDEX rfq_results_pkey ON public.rfq_results USING btree (id);
+CREATE INDEX idx_rfq_stations_rfq ON public.rfq_stations USING btree (rfq_id);
+CREATE UNIQUE INDEX rfq_stations_pkey ON public.rfq_stations USING btree (id);
+CREATE INDEX idx_aliases_master ON public.station_aliases USING btree (master_station_id);
+CREATE INDEX idx_aliases_name ON public.station_aliases USING btree (lower(alias_name));
+CREATE UNIQUE INDEX station_aliases_alias_name_customer_id_key ON public.station_aliases USING btree (alias_name, customer_id);                      
+CREATE UNIQUE INDEX station_aliases_pkey ON public.station_aliases USING btree (id);
+CREATE INDEX idx_staging_customer ON public.station_data_staging USING btree (customer_name);
+CREATE INDEX idx_staging_model ON public.station_data_staging USING btree (model_no);
+CREATE UNIQUE INDEX station_data_staging_pkey ON public.station_data_staging USING btree (id);
+CREATE UNIQUE INDEX station_master_code_key ON public.station_master USING btree (code);
+CREATE UNIQUE INDEX station_master_pkey ON public.station_master USING btree (id);
